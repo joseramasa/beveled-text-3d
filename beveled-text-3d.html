@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Beveled Text 3D — Fase 1: extrusión</title>
+<title>Beveled Text 3D — Fase 2: ribete superior</title>
 <style>
   :root {
     --bg: #0a0a0c;
@@ -118,7 +118,7 @@
 <body>
 
 <aside id="panel">
-  <h1>Beveled Text 3D · Fase 1</h1>
+  <h1>Beveled Text 3D · Fase 2</h1>
 
   <div class="group">
     <label>Texto</label>
@@ -149,6 +149,24 @@
   <div class="group">
     <label>Profundidad de extrusión</label>
     <div class="row"><input type="range" id="depth" min="2" max="60" value="22" step="1"><span class="val" id="depth-v">22</span></div>
+  </div>
+
+  <h2>Ribete (cima)</h2>
+
+  <div class="group">
+    <label>Ancho del ribete</label>
+    <div class="row"><input type="range" id="bevel-size" min="0" max="15" value="2" step="0.1"><span class="val" id="bevel-size-v">2.0</span></div>
+  </div>
+
+  <div class="group">
+    <label>Profundidad del ribete</label>
+    <div class="row"><input type="range" id="bevel-depth" min="0" max="15" value="2" step="0.1"><span class="val" id="bevel-depth-v">2.0</span></div>
+  </div>
+
+  <div class="group">
+    <label>Segmentos</label>
+    <div class="row"><input type="range" id="bevel-seg" min="1" max="12" value="1" step="1"><span class="val" id="bevel-seg-v">1</span></div>
+    <span style="font-size:10px;color:var(--muted)">1 = chaflán plano · &gt;1 = transición curva</span>
   </div>
 
   <h2>Materiales</h2>
@@ -325,11 +343,79 @@ function groupShapes(subpaths) {
 }
 
 // ============================================================================
-// MÓDULO: GEOMETRY BUILDER (FASE 1: extrusión sin bisel)
-// Placa watertight con tres componentes:
-//   - Base plana en Z=0     (material 0 = Base)
-//   - Paredes verticales    (material 1 = Borde)
-//   - Cima plana en Z=depth (material 0 = Base)
+// MÓDULO: BISECTOR OFFSETTING (fase 2)
+// Offset 2D por bisectriz interior. Preserva el nº de vértices y la
+// correspondencia 1:1 entre original y desplazado, lo que permite stitching
+// directo entre niveles del bevel sin resamplear.
+//
+// Convención:
+//   delta < 0 = inset hacia el interior del polígono.
+//   isCCW=true para outer, isCCW=false para holes (CW).
+//   En offsetShapeByBisector pasamos -delta a los holes para que un delta < 0
+//   contraiga el outer Y ensanche los holes (la franja de material se afina
+//   uniformemente por todos los bordes — comportamiento natural del ribete).
+//
+// Capa de seguridad mínima (fase 2): miterLimit. En esquinas afiladas donde
+// la bisectriz se vuelve muy larga, dejamos el vértice en su sitio. No se
+// añaden las capas de "clamp por intersección" ni "segunda pasada iterativa"
+// del v1 — si rompen letras concretas, se añadirán cuando aparezca el caso.
+// ============================================================================
+
+function offsetRingByBisector(ring, delta, isCCW, miterLimit = 4) {
+  const n = ring.length;
+  const result = new Array(n);
+  const eff = -delta;
+
+  // Normales unitarias interiores
+  const normals = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) { normals[i] = { x: 0, y: 0 }; continue; }
+    if (isCCW) normals[i] = { x: -dy / len, y: dx / len };
+    else       normals[i] = { x: dy / len, y: -dx / len };
+  }
+
+  for (let i = 0; i < n; i++) {
+    const np = normals[(i - 1 + n) % n];
+    const nn = normals[i];
+    if ((np.x === 0 && np.y === 0) && (nn.x === 0 && nn.y === 0)) {
+      result[i] = { x: ring[i].x, y: ring[i].y };
+      continue;
+    }
+    const sumX = np.x + nn.x;
+    const sumY = np.y + nn.y;
+    const dot = np.x * nn.x + np.y * nn.y;
+    const denom = 1 + dot;
+    let bx, by;
+    if (Math.abs(denom) < 1e-6) { bx = sumX / 2; by = sumY / 2; }
+    else { bx = sumX / denom; by = sumY / denom; }
+
+    if (Math.hypot(bx, by) > miterLimit) {
+      result[i] = { x: ring[i].x, y: ring[i].y };
+      continue;
+    }
+    result[i] = { x: ring[i].x + bx * eff, y: ring[i].y + by * eff };
+  }
+  return result;
+}
+
+function offsetShapeByBisector(shape, delta, miterLimit = 4) {
+  return {
+    outer: offsetRingByBisector(shape.outer, delta, true, miterLimit),
+    holes: shape.holes.map(h => offsetRingByBisector(h, -delta, false, miterLimit)),
+  };
+}
+
+// ============================================================================
+// MÓDULO: GEOMETRY BUILDER
+// Placa watertight con bisel opcional en el borde superior:
+//   Z=0:                  base plana             (material 0 = Base)
+//   Z=0  → wallTop:       paredes verticales     (material 1 = Borde)
+//   Z=wallTop → Z=depth:  chaflán (si hay bevel) (material 1 = Borde)
+//   Z=depth:              cima (contraída si hay bevel)  (material 0 = Base)
+// con wallTop = depth - bevelDepth (o = depth si bevelDepth = 0).
 // ============================================================================
 
 /**
@@ -350,22 +436,27 @@ function triangulateShape(outer, holes) {
 }
 
 /**
- * Construye la geometría: base + paredes + cima, sin bisel.
+ * Construye la geometría con bevel opcional en la cima.
+ *
+ * Si bevelSize y bevelDepth son ambos > 0, las paredes verticales suben hasta
+ * (depth - bevelDepth) y luego un chaflán de N segmentos lleva la silueta hasta
+ * la versión contraída en Z=depth. Si no, la pared sube recta hasta la cima.
  *
  * Orientación de normales:
- *   - Base en Z=0:    tris invertidos → normal -Z (hacia la cama de impresión)
- *   - Paredes:        outer CCW emite normal radial AFUERA (correcto)
- *                     holes CW emite normal radial al CENTRO del hole (correcto: el aire está dentro)
- *   - Cima en Z=depth: tris originales → normal +Z (hacia la cámara)
+ *   - Base en Z=0:        tris invertidos → -Z
+ *   - Paredes verticales: outer CCW → normal radial fuera; holes CW → normal hacia el aire del hole
+ *   - Chaflán:            misma topología que la pared, vértices superiores desplazados radialmente
+ *                          → la normal queda apuntando hacia fuera y arriba (correcta)
+ *   - Cima en Z=depth:    tris originales → +Z
  *
  * Materiales:
  *   - 0 (Base):   base inferior + cima superior
- *   - 1 (Borde):  paredes laterales (outer y holes)
+ *   - 1 (Borde):  paredes verticales + chaflán
  */
-function buildExtrudedGeometry({ shapes, depth }) {
+function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, bevelSegments = 1 }) {
   const positions = [];
   const indices = [];
-  const groups = []; // {start, count, materialIndex}
+  const groups = [];
   let curStart = 0;
 
   function emitFace(outer, holes, z, flipped) {
@@ -383,16 +474,19 @@ function buildExtrudedGeometry({ shapes, depth }) {
     }
   }
 
-  // Pared vertical entre dos copias del mismo ring a alturas distintas.
-  // Por convenio: ringA en Z=0, ringB en Z=depth. Para outer CCW con
-  // flipNormal=false la normal apunta radialmente hacia AFUERA del polígono.
-  // Para holes CW con flipNormal=false la normal apunta hacia el CENTRO del
-  // hole (donde está el aire). Ambos casos son correctos sin invertir.
-  function stitchWall(ring, zA, zB) {
+  // Pared entre dos copias del MISMO ring (vertical o inclinada según los Z).
+  // ringA en zA (abajo), ringB en zB (arriba). Para outer CCW con orientación
+  // estándar la normal queda radial hacia afuera; para holes CW, radial hacia
+  // el aire del hole. En ambos casos es lo que queremos sin invertir.
+  function stitchRing(ringA, zA, ringB, zB) {
     const baseV = positions.length / 3;
-    const n = ring.length;
-    for (let i = 0; i < n; i++) positions.push(ring[i].x, ring[i].y, zA);
-    for (let i = 0; i < n; i++) positions.push(ring[i].x, ring[i].y, zB);
+    const n = ringA.length;
+    if (n !== ringB.length) {
+      console.warn('stitchRing: longitudes distintas', n, ringB.length);
+      return;
+    }
+    for (let i = 0; i < n; i++) positions.push(ringA[i].x, ringA[i].y, zA);
+    for (let i = 0; i < n; i++) positions.push(ringB[i].x, ringB[i].y, zB);
     for (let i = 0; i < n; i++) {
       const i0 = baseV + i;
       const i1 = baseV + (i + 1) % n;
@@ -403,22 +497,56 @@ function buildExtrudedGeometry({ shapes, depth }) {
     }
   }
 
+  const hasBevel = bevelSize > 1e-6 && bevelDepth > 1e-6;
+  // Reservamos al menos 0.1 mm de pared vertical para que la cima quede a Z=depth
+  // y el bevel no consuma toda la profundidad.
+  const wallTop = hasBevel ? Math.max(0.1, depth - bevelDepth) : depth;
+  const N = Math.max(1, bevelSegments | 0);
+
   for (const shape of shapes) {
-    // ── Base en Z=0 (material 0, normal -Z) ──
+    // ── Base en Z=0 (material 0) ──
     emitFace(shape.outer, shape.holes, 0, true);
     let end = indices.length;
     groups.push({ start: curStart, count: end - curStart, materialIndex: 0 });
     curStart = end;
 
     // ── Paredes verticales (material 1) ──
-    stitchWall(shape.outer, 0, depth);
-    for (const hole of shape.holes) stitchWall(hole, 0, depth);
+    stitchRing(shape.outer, 0, shape.outer, wallTop);
+    for (const hole of shape.holes) stitchRing(hole, 0, hole, wallTop);
     end = indices.length;
     groups.push({ start: curStart, count: end - curStart, materialIndex: 1 });
     curStart = end;
 
-    // ── Cima en Z=depth (material 0, normal +Z) ──
-    emitFace(shape.outer, shape.holes, depth, false);
+    if (hasBevel) {
+      // Niveles del chaflán: levels[0] = silueta original, levels[N] = cima contraída.
+      const levels = [];
+      for (let k = 0; k <= N; k++) {
+        if (k === 0) {
+          levels.push({ outer: shape.outer, holes: shape.holes });
+        } else {
+          const t = k / N;
+          levels.push(offsetShapeByBisector(shape, -bevelSize * t));
+        }
+      }
+
+      for (let k = 0; k < N; k++) {
+        const zA = wallTop + bevelDepth * (k / N);
+        const zB = wallTop + bevelDepth * ((k + 1) / N);
+        stitchRing(levels[k].outer, zA, levels[k + 1].outer, zB);
+        for (let h = 0; h < shape.holes.length; h++) {
+          stitchRing(levels[k].holes[h], zA, levels[k + 1].holes[h], zB);
+        }
+      }
+      end = indices.length;
+      groups.push({ start: curStart, count: end - curStart, materialIndex: 1 });
+      curStart = end;
+
+      // Cima contraída
+      emitFace(levels[N].outer, levels[N].holes, depth, false);
+    } else {
+      // Cima recta
+      emitFace(shape.outer, shape.holes, depth, false);
+    }
     end = indices.length;
     groups.push({ start: curStart, count: end - curStart, materialIndex: 0 });
     curStart = end;
@@ -516,6 +644,48 @@ test('buildExtrudedGeometry cuadrado con hole añade pared interior', () => {
   assert(g.index.count === 96, `expected 96, got ${g.index.count}`);
 });
 
+test('bisector: cuadrado CCW inset 1 → cuadrado 8×8', () => {
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const r = offsetRingByBisector(sq, -1, true);
+  assert(r.length === 4);
+  assertNear(r[0].x, 1, 1e-3); assertNear(r[0].y, 1, 1e-3);
+  assertNear(r[2].x, 9, 1e-3); assertNear(r[2].y, 9, 1e-3);
+});
+
+test('bisector: hole CW con offsetShapeByBisector se ENSANCHA con delta<0', () => {
+  // Cuadrado 20×20 con hole 10×10 centrado. delta=-1 debe contraer outer
+  // (resultado 18×18) y expandir hole (resultado 12×12).
+  const outer = [{x:0,y:0},{x:20,y:0},{x:20,y:20},{x:0,y:20}];
+  const hole = [{x:5,y:5},{x:5,y:15},{x:15,y:15},{x:15,y:5}]; // CW
+  const r = offsetShapeByBisector({outer, holes: [hole]}, -1);
+  // outer área esperada ≈ 18² = 324
+  assertNear(Math.abs(signedArea(r.outer)), 324, 1);
+  // hole área esperada ≈ 12² = 144
+  assertNear(Math.abs(signedArea(r.holes[0])), 144, 1);
+});
+
+test('bisector: miterLimit congela vértices en cuasi-cusp', () => {
+  // Triángulo muy afilado (cusp): el vértice de la punta tiene bisectriz
+  // muy larga. Con miterLimit=4 (default), el vértice no se mueve.
+  const tri = [{x:0,y:0},{x:100,y:1},{x:0,y:2}];
+  const r = offsetRingByBisector(tri, -0.5, true);
+  // El vértice 1 (la punta) debe quedarse cerca de su sitio.
+  assert(Math.abs(r[1].x - 100) < 5, `punta movida demasiado: ${r[1].x}`);
+});
+
+test('buildExtrudedGeometry con bevel: cuadrado 10×10, bevelSize=1, bevelDepth=2, segs=1', () => {
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const g = buildExtrudedGeometry({
+    shapes: [{outer: sq, holes: []}],
+    depth: 5, bevelSize: 1, bevelDepth: 2, bevelSegments: 1,
+  });
+  // 2 base + 8 wall (4 verticales) + 8 chaflán (4 inclinadas) + 2 cima = 20 tris = 60 indices
+  assert(g.index.count === 60, `expected 60, got ${g.index.count}`);
+  // Bbox: cima reducida está en Z=5; base en Z=0
+  assertNear(g.boundingBox.max.z, 5, 1e-3);
+  assertNear(g.boundingBox.min.z, 0, 1e-3);
+});
+
 function runTests() {
   const out = document.getElementById('test-results');
   let pass = 0, fail = 0;
@@ -597,6 +767,9 @@ const state = {
   text: 'ROBER',
   font: null,
   depth: 22,
+  bevelSize: 2,
+  bevelDepth: 2,
+  bevelSeg: 1,
   colorFace: '#00ff00',
   colorBevel: '#ff0000',
 };
@@ -635,7 +808,13 @@ function rebuild() {
       return;
     }
     const shapes = groupShapes(subpaths);
-    const geom = buildExtrudedGeometry({ shapes, depth: state.depth });
+    const geom = buildExtrudedGeometry({
+      shapes,
+      depth: state.depth,
+      bevelSize: state.bevelSize,
+      bevelDepth: Math.min(state.bevelDepth, state.depth - 0.1),
+      bevelSegments: state.bevelSeg,
+    });
 
     const bb = geom.boundingBox;
     geom.translate(-(bb.max.x + bb.min.x) / 2, -(bb.max.y + bb.min.y) / 2, -(bb.max.z + bb.min.z) / 2);
@@ -756,6 +935,9 @@ function bindRange(id, key, parser = parseFloat, decimals = 0, extra = null) {
 }
 
 bindRange('depth', 'depth', parseFloat, 0);
+bindRange('bevel-size', 'bevelSize', parseFloat, 1);
+bindRange('bevel-depth', 'bevelDepth', parseFloat, 1);
+bindRange('bevel-seg', 'bevelSeg', parseInt, 0);
 
 document.getElementById('text-input').addEventListener('input', e => {
   state.text = e.target.value || ' ';
@@ -866,7 +1048,7 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
     + ` xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"`
     + ` xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
  <metadata name="Title">${escapeXml(modelName)}</metadata>
- <metadata name="Application">Beveled Text 3D — Fase 1</metadata>
+ <metadata name="Application">Beveled Text 3D — Fase 2</metadata>
  <resources>
   <basematerials id="100">
 `;
