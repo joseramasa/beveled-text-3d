@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Beveled Text 3D — Fase 2: ribete superior</title>
+<title>Beveled Text 3D — Fase 3: pool hundido</title>
 <style>
   :root {
     --bg: #0a0a0c;
@@ -118,7 +118,7 @@
 <body>
 
 <aside id="panel">
-  <h1>Beveled Text 3D · Fase 2</h1>
+  <h1>Beveled Text 3D · Fase 3</h1>
 
   <div class="group">
     <label>Texto</label>
@@ -151,7 +151,7 @@
     <div class="row"><input type="range" id="depth" min="2" max="60" value="22" step="1"><span class="val" id="depth-v">22</span></div>
   </div>
 
-  <h2>Ribete (cima)</h2>
+  <h2>Ribete (pool hundido)</h2>
 
   <div class="group">
     <label>Ancho del ribete</label>
@@ -436,22 +436,27 @@ function triangulateShape(outer, holes) {
 }
 
 /**
- * Construye la geometría con bevel opcional en la cima.
+ * Construye la geometría con bevel opcional como pool hundido en la cima.
  *
- * Si bevelSize y bevelDepth son ambos > 0, las paredes verticales suben hasta
- * (depth - bevelDepth) y luego un chaflán de N segmentos lleva la silueta hasta
- * la versión contraída en Z=depth. Si no, la pared sube recta hasta la cima.
+ * Si bevelSize y bevelDepth son ambos > 0:
+ *   - Paredes verticales suben TODO el camino, de Z=0 a Z=depth, en silueta original.
+ *   - Chaflán (slope) cae HACIA ADENTRO Y ABAJO desde el borde superior:
+ *     parte del ring original en Z=depth y termina en el ring contraído en Z=poolFloor.
+ *   - "Cima" (= pool floor) plana en Z=poolFloor con la silueta contraída.
+ *   No hay cara horizontal en Z=depth: el techo es enteramente el slope.
+ * Si no hay bevel, la pared sube recta y la cima es plana en Z=depth.
  *
  * Orientación de normales:
- *   - Base en Z=0:        tris invertidos → -Z
- *   - Paredes verticales: outer CCW → normal radial fuera; holes CW → normal hacia el aire del hole
- *   - Chaflán:            misma topología que la pared, vértices superiores desplazados radialmente
- *                          → la normal queda apuntando hacia fuera y arriba (correcta)
- *   - Cima en Z=depth:    tris originales → +Z
+ *   - Base en Z=0:           tris invertidos → -Z (hacia la cama)
+ *   - Paredes verticales:    outer CCW → radial fuera; holes CW → hacia el aire del hole
+ *   - Slope del pool:        ringA = original (Z=depth, alto), ringB = contraído (Z=poolFloor, bajo).
+ *                            Con esta convención la normal apunta hacia DENTRO del pool
+ *                            (hacia el aire del recesado) y hacia arriba.
+ *   - Pool floor en Z=poolFloor: tris originales → +Z (visible desde arriba mirando dentro del pool).
  *
  * Materiales:
- *   - 0 (Base):   base inferior + cima superior
- *   - 1 (Borde):  paredes verticales + chaflán
+ *   - 0 (Base):   base inferior + pool floor
+ *   - 1 (Borde):  paredes verticales + slope
  */
 function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, bevelSegments = 1 }) {
   const positions = [];
@@ -474,10 +479,14 @@ function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, b
     }
   }
 
-  // Pared entre dos copias del MISMO ring (vertical o inclinada según los Z).
-  // ringA en zA (abajo), ringB en zB (arriba). Para outer CCW con orientación
-  // estándar la normal queda radial hacia afuera; para holes CW, radial hacia
-  // el aire del hole. En ambos casos es lo que queremos sin invertir.
+  // Pared/slope entre dos copias del mismo ring a Z distintos.
+  // El triángulo 0 = (ringA[i], ringA[i+1], ringB[i]). Su normal:
+  //   - Outer CCW + zA<zB (pared subiendo): radial hacia afuera del polígono.
+  //   - Outer CCW + zA>zB (slope cayendo hacia adentro): hacia el INTERIOR del polígono y arriba.
+  //   - Hole CW + zA<zB (pared subiendo): hacia el aire del hole (interior del hole).
+  //   - Hole CW + zA>zB (slope inverso del hole, que se ENSANCHA bajando): hacia el aire del hole y arriba.
+  // Las cuatro variantes salen correctas sin flip si pasamos los rings en
+  // las posiciones xy/z que deben ocupar.
   function stitchRing(ringA, zA, ringB, zB) {
     const baseV = positions.length / 3;
     const n = ringA.length;
@@ -498,9 +507,9 @@ function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, b
   }
 
   const hasBevel = bevelSize > 1e-6 && bevelDepth > 1e-6;
-  // Reservamos al menos 0.1 mm de pared vertical para que la cima quede a Z=depth
-  // y el bevel no consuma toda la profundidad.
-  const wallTop = hasBevel ? Math.max(0.1, depth - bevelDepth) : depth;
+  // Pool floor a profundidad (depth - bevelDepth). Reservamos al menos 0.1 mm
+  // para que el pool no llegue hasta la base.
+  const poolFloor = hasBevel ? Math.max(0.1, depth - bevelDepth) : depth;
   const N = Math.max(1, bevelSegments | 0);
 
   for (const shape of shapes) {
@@ -510,15 +519,15 @@ function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, b
     groups.push({ start: curStart, count: end - curStart, materialIndex: 0 });
     curStart = end;
 
-    // ── Paredes verticales (material 1) ──
-    stitchRing(shape.outer, 0, shape.outer, wallTop);
-    for (const hole of shape.holes) stitchRing(hole, 0, hole, wallTop);
+    // ── Paredes verticales SIEMPRE de 0 a Z=depth (silueta original, material 1) ──
+    stitchRing(shape.outer, 0, shape.outer, depth);
+    for (const hole of shape.holes) stitchRing(hole, 0, hole, depth);
     end = indices.length;
     groups.push({ start: curStart, count: end - curStart, materialIndex: 1 });
     curStart = end;
 
     if (hasBevel) {
-      // Niveles del chaflán: levels[0] = silueta original, levels[N] = cima contraída.
+      // Niveles: levels[0] = silueta original (en Z=depth), levels[N] = contraída (en Z=poolFloor).
       const levels = [];
       for (let k = 0; k <= N; k++) {
         if (k === 0) {
@@ -529,9 +538,10 @@ function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, b
         }
       }
 
+      // Slope: cae de Z=depth (k=0) a Z=poolFloor (k=N). zA > zB.
       for (let k = 0; k < N; k++) {
-        const zA = wallTop + bevelDepth * (k / N);
-        const zB = wallTop + bevelDepth * ((k + 1) / N);
+        const zA = depth - bevelDepth * (k / N);
+        const zB = depth - bevelDepth * ((k + 1) / N);
         stitchRing(levels[k].outer, zA, levels[k + 1].outer, zB);
         for (let h = 0; h < shape.holes.length; h++) {
           stitchRing(levels[k].holes[h], zA, levels[k + 1].holes[h], zB);
@@ -541,10 +551,10 @@ function buildExtrudedGeometry({ shapes, depth, bevelSize = 0, bevelDepth = 0, b
       groups.push({ start: curStart, count: end - curStart, materialIndex: 1 });
       curStart = end;
 
-      // Cima contraída
-      emitFace(levels[N].outer, levels[N].holes, depth, false);
+      // Pool floor en Z=poolFloor con la silueta contraída
+      emitFace(levels[N].outer, levels[N].holes, poolFloor, false);
     } else {
-      // Cima recta
+      // Sin bevel: cima plana en Z=depth
       emitFace(shape.outer, shape.holes, depth, false);
     }
     end = indices.length;
@@ -679,11 +689,46 @@ test('buildExtrudedGeometry con bevel: cuadrado 10×10, bevelSize=1, bevelDepth=
     shapes: [{outer: sq, holes: []}],
     depth: 5, bevelSize: 1, bevelDepth: 2, bevelSegments: 1,
   });
-  // 2 base + 8 wall (4 verticales) + 8 chaflán (4 inclinadas) + 2 cima = 20 tris = 60 indices
+  // 2 base + 8 wall (4 verticales × 2) + 8 slope (4 inclinadas × 2) + 2 pool floor = 20 tris = 60 indices
   assert(g.index.count === 60, `expected 60, got ${g.index.count}`);
-  // Bbox: cima reducida está en Z=5; base en Z=0
   assertNear(g.boundingBox.max.z, 5, 1e-3);
   assertNear(g.boundingBox.min.z, 0, 1e-3);
+});
+
+test('buildExtrudedGeometry sunken pool: silueta contraída está en Z=poolFloor (NO en Z=depth)', () => {
+  // depth=5, bevelDepth=2 → poolFloor=3. Vértices contraídos (x≈1) deben estar a Z=3.
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const g = buildExtrudedGeometry({
+    shapes: [{outer: sq, holes: []}],
+    depth: 5, bevelSize: 1, bevelDepth: 2, bevelSegments: 1,
+  });
+  const pos = g.attributes.position.array;
+  let maxZContracted = -Infinity;
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+    if (Math.abs(x - 1) < 0.01 && Math.abs(y - 1) < 0.01) {
+      maxZContracted = Math.max(maxZContracted, z);
+    }
+  }
+  assertNear(maxZContracted, 3, 0.01);
+});
+
+test('buildExtrudedGeometry sunken pool: pared vertical llega a Z=depth', () => {
+  // El borde superior del modelo (en silueta original, x=0 o x=10) debe estar a Z=depth.
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const g = buildExtrudedGeometry({
+    shapes: [{outer: sq, holes: []}],
+    depth: 5, bevelSize: 1, bevelDepth: 2, bevelSegments: 1,
+  });
+  const pos = g.attributes.position.array;
+  let maxZOriginal = -Infinity;
+  for (let i = 0; i < pos.length; i += 3) {
+    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
+    if (Math.abs(x) < 0.01 && Math.abs(y) < 0.01) {
+      maxZOriginal = Math.max(maxZOriginal, z);
+    }
+  }
+  assertNear(maxZOriginal, 5, 0.01);
 });
 
 function runTests() {
@@ -1048,7 +1093,7 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
     + ` xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"`
     + ` xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
  <metadata name="Title">${escapeXml(modelName)}</metadata>
- <metadata name="Application">Beveled Text 3D — Fase 2</metadata>
+ <metadata name="Application">Beveled Text 3D — Fase 3</metadata>
  <resources>
   <basematerials id="100">
 `;
