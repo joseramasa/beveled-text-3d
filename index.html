@@ -125,25 +125,6 @@
     <input type="text" id="text-input" value="ROBER" maxlength="32">
   </div>
 
-  <div class="group">
-    <label>Google Font</label>
-    <select id="gfont-select">
-      <option value="Bebas Neue">Bebas Neue</option>
-      <option value="Anton">Anton</option>
-      <option value="Bungee">Bungee</option>
-      <option value="Black Ops One">Black Ops One</option>
-      <option value="Russo One">Russo One</option>
-      <option value="Bowlby One">Bowlby One</option>
-      <option value="Staatliches">Staatliches</option>
-      <option value="Playfair Display">Playfair Display</option>
-    </select>
-  </div>
-
-  <div class="group">
-    <label>O sube TTF/OTF/WOFF2</label>
-    <input type="file" id="font-upload" accept=".ttf,.otf,.woff,.woff2">
-  </div>
-
   <h2>Geometría</h2>
 
   <div class="group">
@@ -894,63 +875,6 @@ function base64ToArrayBuffer(b64) {
   return bytes.buffer;
 }
 
-async function decodeWoff2(buf) {
-  try {
-    const mod = await import('https://cdn.jsdelivr.net/npm/woff2-encoder@2.0.0/+esm');
-    const result = await mod.decompress(new Uint8Array(buf));
-    return result.buffer.slice(result.byteOffset, result.byteOffset + result.byteLength);
-  } catch (e) {
-    throw new Error('WOFF2 no soportado en este entorno. Sube un TTF/OTF directamente.');
-  }
-}
-
-async function loadFontBuffer(buf) {
-  const view = new DataView(buf);
-  const tag = view.getUint32(0, false);
-  if (tag === 0x774F4632) { // 'wOF2'
-    setStatus('Decodificando WOFF2...');
-    const ttfBuf = await decodeWoff2(buf);
-    return opentype.parse(ttfBuf);
-  }
-  return opentype.parse(buf);
-}
-
-async function loadGoogleFont(family) {
-  setStatus(`Cargando ${family}...`);
-  const cssUrl = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:wght@400&display=swap`;
-  let cssText;
-  try {
-    cssText = await fetch(cssUrl).then(r => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.text();
-    });
-  } catch (e) {
-    throw new Error(`No se pudo contactar Google Fonts (${e.message}).`);
-  }
-  const ttfMatch = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+\.ttf)\)/i);
-  const woff2Match = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+\.woff2)\)/i);
-  const fontUrl = ttfMatch ? ttfMatch[1] : (woff2Match ? woff2Match[1] : null);
-  if (!fontUrl) throw new Error(`No se encontró URL de fuente para ${family}`);
-
-  const buf = await fetch(fontUrl).then(r => {
-    if (!r.ok) throw new Error(`HTTP ${r.status} al descargar TTF`);
-    return r.arrayBuffer();
-  });
-  if (!buf || buf.byteLength < 100) throw new Error(`Buffer de fuente inválido`);
-
-  state.font = await loadFontBuffer(buf);
-  setStatus(`Cargada: ${family}`, 'ok');
-  rebuild();
-}
-
-async function loadUploadedFont(file) {
-  setStatus(`Parseando ${file.name}...`);
-  const buf = await file.arrayBuffer();
-  state.font = await loadFontBuffer(buf);
-  setStatus(`Cargada: ${file.name}`, 'ok');
-  rebuild();
-}
-
 function loadEmbeddedFont() {
   try {
     const buf = base64ToArrayBuffer(EMBEDDED_FONT_B64);
@@ -996,15 +920,6 @@ document.getElementById('color-face').addEventListener('input', e => {
 document.getElementById('color-bevel').addEventListener('input', e => {
   state.colorBevel = e.target.value;
   if (mesh) mesh.material[1].color.set(e.target.value);
-});
-
-document.getElementById('gfont-select').addEventListener('change', e => {
-  loadGoogleFont(e.target.value).catch(err => setStatus(`Error: ${err.message}`, 'err'));
-});
-
-document.getElementById('font-upload').addEventListener('change', e => {
-  const file = e.target.files[0];
-  if (file) loadUploadedFont(file).catch(err => setStatus(`Error: ${err.message}`, 'err'));
 });
 
 // ============================================================================
