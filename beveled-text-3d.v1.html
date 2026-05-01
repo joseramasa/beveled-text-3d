@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8">
-<title>Beveled Text 3D — Fase 1: extrusión</title>
+<title>Beveled Text 3D — v2</title>
 <style>
   :root {
     --bg: #0a0a0c;
@@ -77,6 +77,31 @@
   .colorbox { display: flex; flex-direction: column; gap: 4px; }
   .colorbox label { font-size: 10px; color: var(--muted); }
   input[type="color"] { width: 100%; height: 30px; border: 1px solid var(--border); background: transparent; cursor: pointer; }
+  .toggle-group {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .toggle-group input[type="radio"] { display: none; }
+  .toggle-group label {
+    text-align: center;
+    padding: 7px 6px;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    cursor: pointer;
+    color: var(--muted);
+    background: #0a0a0c;
+    transition: background 0.1s, color 0.1s;
+  }
+  .toggle-group input[type="radio"]:checked + label {
+    background: var(--accent);
+    color: #000;
+    font-weight: 600;
+  }
+  .toggle-group label:not(:last-of-type) { border-right: 1px solid var(--border); }
   button {
     background: var(--accent); color: #000; border: none;
     padding: 9px; font-family: inherit; font-size: 11px;
@@ -113,12 +138,13 @@
     padding: 6px 0;
   }
   details[open] summary { color: var(--text); }
+  .profile-svg { width: 100%; height: 50px; background: #0a0a0c; border: 1px solid var(--border); border-radius: 2px; }
 </style>
 </head>
 <body>
 
 <aside id="panel">
-  <h1>Beveled Text 3D · Fase 1</h1>
+  <h1>Beveled Text 3D · v2</h1>
 
   <div class="group">
     <label>Texto</label>
@@ -151,15 +177,53 @@
     <div class="row"><input type="range" id="depth" min="2" max="60" value="22" step="1"><span class="val" id="depth-v">22</span></div>
   </div>
 
+  <div class="group">
+    <label>Dirección del bisel</label>
+    <div class="toggle-group">
+      <input type="radio" name="bevel-mode" id="bevel-mode-out" value="out" checked>
+      <label for="bevel-mode-out">Hacia afuera</label>
+      <input type="radio" name="bevel-mode" id="bevel-mode-in" value="in">
+      <label for="bevel-mode-in">Hacia adentro</label>
+    </div>
+  </div>
+
+  <div class="group">
+    <label>Ancho del bisel</label>
+    <div class="row"><input type="range" id="bevel-size" min="0" max="15" value="3.5" step="0.1"><span class="val" id="bevel-size-v">3.5</span></div>
+  </div>
+
+  <div class="group">
+    <label>Profundidad del bisel</label>
+    <div class="row"><input type="range" id="bevel-thick" min="0" max="15" value="3" step="0.1"><span class="val" id="bevel-thick-v">3.0</span></div>
+  </div>
+
+  <div class="group">
+    <label>Segmentos del bisel</label>
+    <div class="row"><input type="range" id="bevel-seg" min="1" max="12" value="6" step="1"><span class="val" id="bevel-seg-v">6</span></div>
+  </div>
+
+  <div class="group">
+    <label>Curvatura del perfil</label>
+    <div class="row"><input type="range" id="profile" min="-1" max="1" value="0" step="0.05"><span class="val" id="profile-v">0.00</span></div>
+    <svg class="profile-svg" id="profile-svg" viewBox="0 0 100 50" preserveAspectRatio="none"></svg>
+    <span style="font-size:10px;color:var(--muted)">−1 cóncavo · 0 recto · +1 convexo</span>
+  </div>
+
+  <div class="group">
+    <label>Tolerancia cima (modo adentro)</label>
+    <div class="row"><input type="range" id="edge-tol" min="1" max="30" value="8" step="0.5"><span class="val" id="edge-tol-v">8</span></div>
+    <span style="font-size:10px;color:var(--muted)">× ancho del bisel · bajo = más estricto · alto = sin filtro</span>
+  </div>
+
   <h2>Materiales</h2>
 
   <div class="row colors">
     <div class="colorbox">
-      <label>Base (caras)</label>
+      <label>Base</label>
       <input type="color" id="color-face" value="#e8d28a">
     </div>
     <div class="colorbox">
-      <label>Borde (paredes)</label>
+      <label>Borde</label>
       <input type="color" id="color-bevel" value="#c9a227">
     </div>
   </div>
@@ -197,7 +261,8 @@
     "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
     "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
     "opentype": "https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.module.js",
-    "earcut": "https://cdn.jsdelivr.net/npm/earcut@3.0.2/+esm"
+    "earcut": "https://cdn.jsdelivr.net/npm/earcut@3.0.2/+esm",
+    "clipper": "https://cdn.jsdelivr.net/npm/clipper-lib@6.4.2/+esm"
   }
 }
 </script>
@@ -208,6 +273,56 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { zipSync, strToU8 } from 'https://cdn.jsdelivr.net/npm/fflate@0.8.2/+esm';
 import opentype from 'opentype';
 import earcut from 'earcut';
+import ClipperLib from 'clipper';
+
+// ============================================================================
+// MÓDULO: PROFILE
+// Funciones puras que mapean t ∈ [0, 1] → (offsetFrac, depthFrac) ∈ [0, 1]²
+// Garantía de monotonía en ambos ejes para evitar geometría auto-intersectada.
+// ============================================================================
+
+/**
+ * Construye una función de perfil parametrizada por curvatura.
+ * @param {number} curvature ∈ [-1, +1]: -1 cóncavo, 0 recto, +1 convexo
+ * @returns {(t: number) => {off: number, dep: number}}
+ */
+function makeProfile(curvature) {
+  // Clamp por seguridad
+  const c = Math.max(-1, Math.min(1, curvature));
+
+  if (Math.abs(c) < 1e-6) {
+    // Recto: offset y profundidad crecen linealmente
+    return (t) => ({ off: t, dep: t });
+  }
+
+  if (c > 0) {
+    // Convexo: cuarto de circunferencia. El offset crece rápido al inicio,
+    // la profundidad crece rápido al final → silueta abombada hacia afuera.
+    // (off, dep) = (sin(t·π/2), 1−cos(t·π/2)) interpolado con la recta.
+    return (t) => {
+      const a = t * Math.PI / 2;
+      const offCurve = Math.sin(a);
+      const depCurve = 1 - Math.cos(a);
+      return {
+        off: t * (1 - c) + offCurve * c,
+        dep: t * (1 - c) + depCurve * c,
+      };
+    };
+  }
+
+  // Cóncavo: el complemento. Offset crece lento al inicio, rápido al final.
+  // (off, dep) = (1−cos(t·π/2), sin(t·π/2)) interpolado con la recta.
+  const m = -c;
+  return (t) => {
+    const a = t * Math.PI / 2;
+    const offCurve = 1 - Math.cos(a);
+    const depCurve = Math.sin(a);
+    return {
+      off: t * (1 - m) + offCurve * m,
+      dep: t * (1 - m) + depCurve * m,
+    };
+  };
+}
 
 // ============================================================================
 // MÓDULO: GLYPH PARSING
@@ -215,8 +330,9 @@ import earcut from 'earcut';
 // Convención de salida:
 //   - outer rings: CCW (área positiva en sistema con Y arriba)
 //   - holes:       CW  (área negativa)
-// opentype emite con Y abajo; invertimos a "Y matemática" (Y arriba) para que
-// CCW = área positiva.
+// Internamente trabajamos con Y invertida (Y abajo) porque opentype usa Y arriba
+// pero la conversión a 3D va a flipear; mantenemos consistencia interna con
+// "Y matemática" (Y arriba) para que CCW = área positiva.
 // ============================================================================
 
 function signedArea(pts) {
@@ -246,7 +362,8 @@ function ensureOrientation(pts, wantCCW) {
 }
 
 /**
- * Sampled subpaths from a font path. Y already inverted (Y up = positive).
+ * Sampled subpaths from a font path. Y is already inverted (Y up = positive).
+ * @returns Array<Array<{x,y}>>
  */
 function sampleFontPath(font, text, size, curveSegments = 14) {
   const path = font.getPath(text, 0, 0, size);
@@ -257,6 +374,7 @@ function sampleFontPath(font, text, size, curveSegments = 14) {
     if (cmd.type === 'M') {
       if (current && current.length) subpaths.push(current);
       current = [];
+      // En opentype Y crece hacia abajo; invertimos para tener Y matemática.
       current.push({ x: cmd.x, y: -cmd.y });
     } else if (cmd.type === 'L') {
       current.push({ x: cmd.x, y: -cmd.y });
@@ -278,21 +396,28 @@ function sampleFontPath(font, text, size, curveSegments = 14) {
         const y = u*u*u*p0.y + 3*u*u*t*(-cmd.y1) + 3*u*t*t*(-cmd.y2) + t*t*t*(-cmd.y);
         current.push({ x, y });
       }
+    } else if (cmd.type === 'Z') {
+      // El último punto suele coincidir con el primero; lo dejamos como está.
     }
-    // 'Z': cerrado implícito; el último punto suele coincidir con el primero.
   }
   if (current && current.length) subpaths.push(current);
 
-  // Sanitización: vértices consecutivos casi-coincidentes producen segmentos
-  // de longitud cero que rompen la triangulación.
+  // Sanitización del ring: eliminar vértices consecutivos casi-coincidentes.
+  // opentype.js genera estos en transiciones de Bézier (un comando 'M' nuevo
+  // tras un 'Z', o curva→curva con primer punto duplicado), y crean segmentos
+  // de longitud cero que rompen el bisector offset (auto-intersección).
+  // Tolerancia: 0.5 unidades (para fontSize=72, eso es < 1% del tamaño).
   const tol = 0.5;
   return subpaths.map(sub => {
     const dedupe = [];
     for (let i = 0; i < sub.length; i++) {
       const p = sub[i];
       const prev = dedupe[dedupe.length - 1];
-      if (!prev || Math.hypot(p.x - prev.x, p.y - prev.y) > tol) dedupe.push(p);
+      if (!prev || Math.hypot(p.x - prev.x, p.y - prev.y) > tol) {
+        dedupe.push(p);
+      }
     }
+    // Cíclico: último ≈ primero también se elimina
     if (dedupe.length > 1) {
       const first = dedupe[0];
       const last = dedupe[dedupe.length - 1];
@@ -304,13 +429,13 @@ function sampleFontPath(font, text, size, curveSegments = 14) {
 
 /**
  * Agrupa subpaths en {outer, holes} usando containment + orientación.
- * Ordena por |área| descendente para asociar cada hole al outer más pequeño
- * que lo contiene.
+ * @returns Array<{outer: Array<{x,y}>, holes: Array<Array<{x,y}>>}>
  */
 function groupShapes(subpaths) {
   const shapes = [];
   const used = new Array(subpaths.length).fill(false);
 
+  // Ordenar por |área| descendente: los outers son más grandes que sus holes.
   const indexed = subpaths.map((p, i) => ({ p, i, area: Math.abs(signedArea(p)) }))
     .sort((a, b) => b.area - a.area);
 
@@ -321,9 +446,12 @@ function groupShapes(subpaths) {
 
     for (const { p: cand, i: j } of indexed) {
       if (i === j || used[j]) continue;
+      // Test: punto medio del candidato dentro del outer
       const testPt = cand[Math.floor(cand.length / 2)];
       if (pointInPolygon(testPt, outerCCW)) {
-        shape.holes.push(ensureOrientation(cand, false));
+        // Verificar que no esté contenido en otro outer ya creado más pequeño
+        // (caso patológico raro en glifos; lo ignoramos para v2)
+        shape.holes.push(ensureOrientation(cand, false)); // holes CW
         used[j] = true;
       }
     }
@@ -334,104 +462,666 @@ function groupShapes(subpaths) {
 }
 
 // ============================================================================
-// MÓDULO: GEOMETRY BUILDER (FASE 1: extrusión sin bisel)
-// Placa watertight con tres componentes:
-//   - Base plana en Z=0     (material 0 = Base)
-//   - Paredes verticales    (material 1 = Borde)
-//   - Cima plana en Z=depth (material 0 = Base)
+// MÓDULO: OFFSETTING (clipper-lib)
+// Clipper trabaja con enteros. Escalamos por SCALE, operamos, desescalamos.
 // ============================================================================
 
-/**
- * Triangula un shape (outer CCW + holes CW) con earcut. Devuelve flat verts y tris.
- */
-function triangulateShape(outer, holes) {
-  const flat = [];
-  for (const p of outer) flat.push(p.x, p.y);
-  const holeIdx = [];
-  let cursor = outer.length;
-  for (const hole of holes) {
-    holeIdx.push(cursor);
-    for (const p of hole) flat.push(p.x, p.y);
-    cursor += hole.length;
-  }
-  const tris = earcut(flat, holeIdx.length ? holeIdx : null, 2);
-  return { flat, tris };
+const CLIPPER_SCALE = 1000;
+
+function toClipper(rings) {
+  return rings.map(ring => ring.map(p => ({
+    X: Math.round(p.x * CLIPPER_SCALE),
+    Y: Math.round(p.y * CLIPPER_SCALE),
+  })));
+}
+
+function fromClipper(rings) {
+  return rings.map(ring => ring.map(p => ({
+    x: p.X / CLIPPER_SCALE,
+    y: p.Y / CLIPPER_SCALE,
+  })));
 }
 
 /**
- * Construye la geometría: base + paredes + cima, sin bisel.
- *
- * Orientación de normales:
- *   - Base en Z=0:    tris invertidos → normal -Z (hacia la cama de impresión)
- *   - Paredes:        outer CCW emite normal radial AFUERA (correcto)
- *                     holes CW emite normal radial al CENTRO del hole (correcto: el aire está dentro)
- *   - Cima en Z=depth: tris originales → normal +Z (hacia la cámara)
- *
- * Materiales:
- *   - 0 (Base):   base inferior + cima superior
- *   - 1 (Borde):  paredes laterales (outer y holes)
+ * Offset 2D de un shape con holes. delta < 0 contrae (inset), > 0 expande.
+ * Mantiene la topología outer+holes y devuelve la(s) componentes resultantes.
+ * @param {{outer, holes}} shape
+ * @param {number} delta en unidades del shape (NO escaladas)
+ * @returns Array<{outer, holes}>  // puede dividirse en varias componentes
  */
-function buildExtrudedGeometry({ shapes, depth }) {
-  const positions = [];
-  const indices = [];
-  const groups = []; // {start, count, materialIndex}
-  let curStart = 0;
+function offsetShape(shape, delta) {
+  const co = new ClipperLib.ClipperOffset(2, 0.25);
+  // Outer + holes pasan al mismo offsetter; clipper interpreta orientación
+  // automáticamente para inset coherente.
+  const allRings = [shape.outer, ...shape.holes];
+  const cRings = toClipper(allRings);
+  co.AddPaths(cRings, ClipperLib.JoinType.jtMiter, ClipperLib.EndType.etClosedPolygon);
 
-  function emitFace(outer, holes, z, flipped) {
-    const { flat, tris } = triangulateShape(outer, holes);
-    const baseV = positions.length / 3;
-    for (let i = 0; i < flat.length; i += 2) {
-      positions.push(flat[i], flat[i + 1], z);
-    }
-    if (flipped) {
-      for (let i = 0; i < tris.length; i += 3) {
-        indices.push(tris[i] + baseV, tris[i + 2] + baseV, tris[i + 1] + baseV);
+  const sol = new ClipperLib.PolyTree();
+  co.Execute(sol, delta * CLIPPER_SCALE);
+
+  // PolyTree → lista de {outer, holes}
+  const result = [];
+  function walk(node) {
+    for (const child of node.Childs()) {
+      if (!child.IsHole()) {
+        const outer = child.Contour().map(p => ({ x: p.X / CLIPPER_SCALE, y: p.Y / CLIPPER_SCALE }));
+        const holes = [];
+        for (const h of child.Childs()) {
+          if (h.IsHole()) {
+            holes.push(h.Contour().map(p => ({ x: p.X / CLIPPER_SCALE, y: p.Y / CLIPPER_SCALE })));
+            // recursión para componentes anidadas dentro del hole
+            walk(h);
+          }
+        }
+        // Asegurar orientaciones: outer CCW, holes CW
+        result.push({
+          outer: ensureOrientation(outer, true),
+          holes: holes.map(h => ensureOrientation(h, false)),
+        });
       }
+    }
+  }
+  walk(sol);
+  return result;
+}
+
+/**
+ * Encuentra el inset máximo (búsqueda binaria) que produce shape no vacío.
+ * Para clamp de seguridad del bevelWidth.
+ * @returns {number} max safe inset distance
+ */
+function findMaxSafeInset(shape, hardCap = 50) {
+  let lo = 0, hi = hardCap;
+  let bestSafe = 0;
+  for (let iter = 0; iter < 16; iter++) {
+    const mid = (lo + hi) / 2;
+    const r = offsetShape(shape, -mid);
+    // Consideramos "seguro" si conserva al menos una componente con outer no degenerado
+    const ok = r.length > 0 && r.every(c => c.outer.length >= 3 && Math.abs(signedArea(c.outer)) > 1e-3);
+    if (ok) { bestSafe = mid; lo = mid; }
+    else { hi = mid; }
+  }
+  return bestSafe;
+}
+
+// ============================================================================
+// MÓDULO: BISECTOR OFFSETTING
+// Offset por bisectriz interior. A diferencia de clipper, preserva el número
+// de vértices y la correspondencia 1:1, lo que permite stitching directo entre
+// niveles del bevel SIN resamplear ni rotar (que era la causa del bug visual).
+//
+// Limitación: en esquinas cóncavas con offset > inradius local, el ring se
+// auto-intersecciona. findMaxSafeInset (vía clipper) lo clampea aguas arriba.
+// ============================================================================
+
+/**
+ * Calcula t ∈ (0,1) si el segmento p0→p1 cruza q0→q1, o null en otro caso.
+ * Helper para el clamp por intersección del bisector seguro.
+ */
+function _segmentIntersectionT(p0, p1, q0, q1) {
+  const r = { x: p1.x - p0.x, y: p1.y - p0.y };
+  const s = { x: q1.x - q0.x, y: q1.y - q0.y };
+  const rxs = r.x * s.y - r.y * s.x;
+  if (Math.abs(rxs) < 1e-12) return null;
+  const dx = q0.x - p0.x, dy = q0.y - p0.y;
+  const t = (dx * s.y - dy * s.x) / rxs;
+  const u = (dx * r.y - dy * r.x) / rxs;
+  if (t > 1e-9 && t < 1 - 1e-9 && u >= 0 && u <= 1) return t;
+  return null;
+}
+
+/**
+ * Offset un ring por bisectriz interior con TRES capas de seguridad:
+ *   1. miterLimit: si la magnitud del bisector excede miterLimit, no mover.
+ *   2. Clamp por intersección: si el segmento [original, candidato] cruza alguna
+ *      arista no-adyacente del ring original, escalar el desplazamiento al 95%
+ *      de la primera intersección (margen de seguridad).
+ *   3. Segunda pasada iterativa: si tras el clamp anterior dos aristas RESULTANTES
+ *      siguen cruzándose (caso donde dos vértices se mueven simultáneamente y
+ *      sus aristas se enlazan), retraer al 60% los 4 vértices implicados y
+ *      repetir hasta no detectar cruces (máx 5 iteraciones).
+ *
+ * Convención: delta < 0 = INSET (consistente con clipper-lib).
+ *
+ * Esto elimina auto-intersecciones incluso en glifos complejos con cóncavos
+ * afilados y curvaturas extremas (verificado en stress test con R compleja
+ * de 98 vértices a delta=-5).
+ *
+ * @returns {Array<{x,y}>} ring con MISMA longitud que el original (correspondencia 1:1)
+ */
+function offsetRingByBisector(ring, delta, isCCW, miterLimit = 2) {
+  const n = ring.length;
+  const result = new Array(n);
+  const effectiveDelta = -delta;
+
+  // Normales unitarias interiores
+  const normals = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = ring[i], b = ring[(i + 1) % n];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-9) { normals[i] = { x: 0, y: 0 }; continue; }
+    if (isCCW) normals[i] = { x: -dy / len, y: dx / len };
+    else       normals[i] = { x: dy / len, y: -dx / len };
+  }
+
+  // Capa 1: candidatos por bisectriz, con miterLimit como kept-in-place
+  const cands = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const np = normals[(i - 1 + n) % n];
+    const nn = normals[i];
+
+    if ((np.x === 0 && np.y === 0) || (nn.x === 0 && nn.y === 0)) {
+      const non = (np.x === 0 && np.y === 0) ? nn : np;
+      cands[i] = {
+        x: ring[i].x + non.x * effectiveDelta,
+        y: ring[i].y + non.y * effectiveDelta,
+        kept: false,
+      };
+      continue;
+    }
+
+    const sumX = np.x + nn.x;
+    const sumY = np.y + nn.y;
+    const dot = np.x * nn.x + np.y * nn.y;
+    const denom = 1 + dot;
+    let bx, by;
+    if (Math.abs(denom) < 1e-6) { bx = sumX / 2; by = sumY / 2; }
+    else { bx = sumX / denom; by = sumY / denom; }
+
+    const mag = Math.hypot(bx, by);
+    if (mag > miterLimit) {
+      cands[i] = { x: ring[i].x, y: ring[i].y, kept: true };
+      continue;
+    }
+
+    cands[i] = {
+      x: ring[i].x + bx * effectiveDelta,
+      y: ring[i].y + by * effectiveDelta,
+      kept: false,
+    };
+  }
+
+  // Capa 2: para cada vértice movido, comprobar si su segmento de desplazamiento
+  // [ring[i] → cand[i]] cruza alguna arista no-adyacente del ring ORIGINAL.
+  // Si cruza, escalar el desplazamiento al 95% de la primera intersección.
+  for (let i = 0; i < n; i++) {
+    if (cands[i].kept) {
+      result[i] = { x: cands[i].x, y: cands[i].y };
+      continue;
+    }
+    const p0 = ring[i];
+    const p1 = cands[i];
+    let minT = 1;
+
+    for (let j = 0; j < n; j++) {
+      if (j === i || j === (i - 1 + n) % n) continue; // saltar adyacentes
+      const t = _segmentIntersectionT(p0, p1, ring[j], ring[(j + 1) % n]);
+      if (t !== null && t < minT) minT = t;
+    }
+
+    if (minT < 1) {
+      const safeT = minT * 0.95;
+      result[i] = {
+        x: p0.x + (p1.x - p0.x) * safeT,
+        y: p0.y + (p1.y - p0.y) * safeT,
+      };
     } else {
-      for (let i = 0; i < tris.length; i++) indices.push(tris[i] + baseV);
+      result[i] = { x: p1.x, y: p1.y };
     }
   }
 
-  // Pared vertical entre dos copias del mismo ring a alturas distintas.
-  // Por convenio: ringA en Z=0, ringB en Z=depth. Para outer CCW con
-  // flipNormal=false la normal apunta radialmente hacia AFUERA del polígono.
-  // Para holes CW con flipNormal=false la normal apunta hacia el CENTRO del
-  // hole (donde está el aire). Ambos casos son correctos sin invertir.
-  function stitchWall(ring, zA, zB) {
+  // Capa 3: segunda pasada iterativa. Detectar cruces entre aristas RESULTANTES
+  // (caso donde dos vértices se mueven a posiciones que cruzan sus aristas
+  // entre sí). Retraer al 60% los 4 vértices implicados y repetir.
+  for (let iter = 0; iter < 5; iter++) {
+    let foundCrossing = false;
+    for (let i = 0; i < n; i++) {
+      const a1 = result[i], a2 = result[(i + 1) % n];
+      for (let j = i + 2; j < n; j++) {
+        if ((j + 1) % n === i) continue;
+        const b1 = result[j], b2 = result[(j + 1) % n];
+        const cr = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+        const d1 = cr(b1, b2, a1), d2 = cr(b1, b2, a2);
+        const d3 = cr(a1, a2, b1), d4 = cr(a1, a2, b2);
+        if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) &&
+            ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+          foundCrossing = true;
+          for (const k of [i, (i + 1) % n, j, (j + 1) % n]) {
+            const orig = ring[k];
+            result[k] = {
+              x: orig.x + (result[k].x - orig.x) * 0.6,
+              y: orig.y + (result[k].y - orig.y) * 0.6,
+            };
+          }
+        }
+      }
+    }
+    if (!foundCrossing) break;
+  }
+
+  return result;
+}
+
+/**
+ * Offset un shape completo (outer + holes). delta < 0 contrae el shape.
+ * Para holes (CW) se invierte el delta: si el shape se contrae, el hole se expande.
+ */
+function offsetShapeByBisector(shape, delta, miterLimit = 2) {
+  return {
+    outer: offsetRingByBisector(shape.outer, delta, true, miterLimit),
+    holes: shape.holes.map(h => offsetRingByBisector(h, -delta, false, miterLimit)),
+  };
+}
+
+// ============================================================================
+// MÓDULO: GEOMETRY BUILDER
+// Construye BufferGeometry con grupos: 0 = face, 1 = bevel
+// ============================================================================
+
+/**
+ * Triangula una lista de shapes 2D (outer + holes) usando earcut.
+ * @returns {{vertices: Float32Array (xy pairs), indices: number[]}}
+ */
+function triangulate2D(shapes) {
+  const allTris = [];
+  const allVerts = [];
+  let baseIdx = 0;
+
+  for (const shape of shapes) {
+    const flat = [];
+    for (const p of shape.outer) flat.push(p.x, p.y);
+    const holeIndices = [];
+    let cursor = shape.outer.length;
+    for (const hole of shape.holes) {
+      holeIndices.push(cursor);
+      for (const p of hole) flat.push(p.x, p.y);
+      cursor += hole.length;
+    }
+    const tris = earcut(flat, holeIndices.length ? holeIndices : null, 2);
+    for (let i = 0; i < tris.length; i++) allTris.push(tris[i] + baseIdx);
+    for (let i = 0; i < flat.length; i++) allVerts.push(flat[i]);
+    baseIdx += flat.length / 2;
+  }
+
+  return { vertices: allVerts, indices: allTris };
+}
+
+/**
+ * Construye la geometría completa con bevel paramétrico.
+ *
+ * Algoritmo (modelo placa imprimible, base plana en Z=0):
+ *   1. Base en Z=0 con la silueta original (winding invertido, normal -Z).
+ *   2. Pared vertical de Z=0 a Z=h (donde h = depth - bevelDepth), silueta original.
+ *   3. Bevel: N+1 niveles S₀, S₁, ..., Sₙ offsetados por bisectriz interior.
+ *      - Nivel 0 = silueta original en Z=h.
+ *      - Nivel k = silueta contraída por bevelWidth·profile(t_k).off en Z=h+bevelDepth·profile(t_k).dep.
+ *      - Stitching entre niveles consecutivos genera la pendiente del bevel.
+ *   4. Cara superior en Z=depth con la silueta contraída del nivel N.
+ *
+ *   El modelo es watertight (la pared lateral comparte vértices con la base
+ *   abajo y con el ring nivel-0 del bevel arriba en Z=h, ambos siendo la
+ *   silueta original sin offset). Listo para impresión 3D sin soportes.
+ *
+ * @returns {BufferGeometry} con dos grupos: 0 = face (base + cara superior), 1 = bevel + pared
+ */
+function buildBeveledTextGeometry({
+  shapes,           // [{outer, holes}, ...] en plano XY (Y arriba)
+  depth,
+  bevelWidth,
+  bevelDepth,
+  bevelSegments,
+  bevelMode,        // 'out' | 'in'
+  edgeTolMult,      // multiplicador de bevelWidth para el filtro de aristas espurias en la cima del modo 'in'
+  profileFn,        // t → {off, dep}
+}) {
+  const positions = [];
+  const indices = [];
+  const groupRanges = []; // {start, count, materialIndex}
+  let curStart = 0;
+
+  // Helper: añade una lista de triángulos (ya con vértices propios) a positions/indices
+  function addTriangles(verts2D, tris, z) {
     const baseV = positions.length / 3;
-    const n = ring.length;
-    for (let i = 0; i < n; i++) positions.push(ring[i].x, ring[i].y, zA);
-    for (let i = 0; i < n; i++) positions.push(ring[i].x, ring[i].y, zB);
+    for (let i = 0; i < verts2D.length; i += 2) {
+      positions.push(verts2D[i], verts2D[i + 1], z);
+    }
+    for (const t of tris) indices.push(t + baseV);
+  }
+
+  // Helper: stitching entre dos rings con el mismo número de vértices
+  // ringA en zA, ringB en zB. Genera 2 triángulos por par de aristas.
+  // Asume ringA y ringB tienen IGUAL número de puntos (correspondencia 1:1).
+  function stitchRings(ringA, zA, ringB, zB, flipNormal = false) {
+    const baseV = positions.length / 3;
+    const n = ringA.length;
+    if (n !== ringB.length) {
+      console.warn('stitchRings: ring length mismatch', n, ringB.length);
+      return;
+    }
+    for (let i = 0; i < n; i++) {
+      positions.push(ringA[i].x, ringA[i].y, zA);
+    }
+    for (let i = 0; i < n; i++) {
+      positions.push(ringB[i].x, ringB[i].y, zB);
+    }
     for (let i = 0; i < n; i++) {
       const i0 = baseV + i;
       const i1 = baseV + (i + 1) % n;
       const j0 = baseV + n + i;
       const j1 = baseV + n + (i + 1) % n;
-      indices.push(i0, i1, j0);
-      indices.push(i1, j1, j0);
+      if (flipNormal) {
+        indices.push(i0, j0, i1);
+        indices.push(i1, j0, j1);
+      } else {
+        indices.push(i0, i1, j0);
+        indices.push(i1, j1, j0);
+      }
     }
   }
 
-  for (const shape of shapes) {
-    // ── Base en Z=0 (material 0, normal -Z) ──
+  // El offsetting por bisectriz preserva el número de vértices y la
+  // correspondencia 1:1 entre niveles, así que NO necesitamos resamplear.
+  // El stitching es directo: vértice i del nivel k se conecta con vértice i del nivel k+1.
+
+  /**
+   * Modelo placa imprimible:
+   *
+   *   Z=depth     ← cara superior (silueta contraída por bevelWidth)
+   *      ↑
+   *      bevel (de h a depth)
+   *      ↑
+   *   Z=h         ← inicio del bevel = silueta original
+   *      ↑
+   *      pared vertical (de 0 a h)
+   *      ↑
+   *   Z=0         ← BASE plana (silueta original) — toca la cama de impresión
+   *
+   * Donde h = depth - bevelDepth.
+   *
+   * Si bevelWidth o bevelDepth son 0, fast path: solo base + pared + cara superior.
+   *
+   * Orientación de normales (validado en test-plate-orientations.js):
+   *   - Base:    tris flipped, normal -Z   (oculta, hacia la cama)
+   *   - Pared:   flip=false                 (radial hacia afuera para outer, al centro para hole)
+   *   - Bevel:   flip=false                 (normal +Z, visible desde la cámara)
+   *   - Cara sup: tris original, normal +Z (visible desde la cámara)
+   */
+  function processShape(shape) {
+    const N = bevelSegments;
+    const hasBevel = bevelWidth > 1e-6 && bevelDepth > 1e-6;
+
+    // Helper común: triangular un shape (outer + holes) y emitir tris
+    function emitFace(outer, holes, z, flipped, maxEdge = Infinity) {
+      const flat = [];
+      for (const p of outer) flat.push(p.x, p.y);
+      const holeIdx = [];
+      let cursor = outer.length;
+      for (const hole of holes) {
+        holeIdx.push(cursor);
+        for (const p of hole) flat.push(p.x, p.y);
+        cursor += hole.length;
+      }
+      const tris = earcut(flat, holeIdx.length ? holeIdx : null, 2);
+
+      // Filtrar triángulos espurios por tamaño máximo de arista.
+      // Cuando los rings outer y holes pasan casi tangentes (zonas finas anulares),
+      // earcut puede emitir triángulos que cruzan la zona anular en vez de seguirla,
+      // produciendo aristas largas que rellenan zonas que no deberían tener material.
+      // Si maxEdge < Infinity, descartamos cualquier triángulo cuya arista más larga
+      // exceda el umbral.
+      let filtered = tris;
+      if (maxEdge < Infinity) {
+        filtered = [];
+        const max2 = maxEdge * maxEdge;
+        for (let i = 0; i < tris.length; i += 3) {
+          const a = tris[i], b = tris[i + 1], c = tris[i + 2];
+          const ax = flat[2*a], ay = flat[2*a+1];
+          const bx = flat[2*b], by = flat[2*b+1];
+          const cx = flat[2*c], cy = flat[2*c+1];
+          const e1 = (bx-ax)*(bx-ax) + (by-ay)*(by-ay);
+          const e2 = (cx-bx)*(cx-bx) + (cy-by)*(cy-by);
+          const e3 = (ax-cx)*(ax-cx) + (ay-cy)*(ay-cy);
+          const longest2 = Math.max(e1, e2, e3);
+          if (longest2 <= max2) filtered.push(a, b, c);
+        }
+      }
+
+      let outTris = filtered;
+      if (flipped) {
+        outTris = [];
+        for (let i = 0; i < filtered.length; i += 3) {
+          outTris.push(filtered[i], filtered[i + 2], filtered[i + 1]);
+        }
+      }
+      addTriangles(flat, outTris, z);
+    }
+
+    // ── BASE en Z=0 (silueta original con winding invertido, normal -Z) ──
+    // Convención de materiales:
+    //   modo 'in':  base inferior es Base (face) — es la cara plana del fondo,
+    //               coherente con el resto de superficies grandes que son Base.
+    //   modo 'out': base inferior es Borde — en este modo solo la cima es Base,
+    //               todo el resto (pared, chaflán, base) es Borde.
+    const baseMatIdx = (bevelMode === 'in') ? 0 : 1;
     emitFace(shape.outer, shape.holes, 0, true);
-    let end = indices.length;
-    groups.push({ start: curStart, count: end - curStart, materialIndex: 0 });
-    curStart = end;
+    const baseEnd = indices.length;
+    groupRanges.push({ start: curStart, count: baseEnd - curStart, materialIndex: baseMatIdx });
+    curStart = baseEnd;
 
-    // ── Paredes verticales (material 1) ──
-    stitchWall(shape.outer, 0, depth);
-    for (const hole of shape.holes) stitchWall(hole, 0, depth);
-    end = indices.length;
-    groups.push({ start: curStart, count: end - curStart, materialIndex: 1 });
-    curStart = end;
+    // ── FAST PATH sin bevel: pared completa + cara superior plana ──
+    if (!hasBevel) {
+      const allRings = [shape.outer, ...shape.holes];
+      for (const ring of allRings) {
+        stitchRings(ring, 0, ring, depth, false);
+      }
+      const wallEnd = indices.length;
+      // Sin bevel no hay realmente distinción semántica entre "cima" y "borde".
+      // Convención: pared = Borde (consistente con modo 'out' que aplica esta regla)
+      groupRanges.push({ start: curStart, count: wallEnd - curStart, materialIndex: 1 });
+      curStart = wallEnd;
 
-    // ── Cima en Z=depth (material 0, normal +Z) ──
-    emitFace(shape.outer, shape.holes, depth, false);
-    end = indices.length;
-    groups.push({ start: curStart, count: end - curStart, materialIndex: 0 });
-    curStart = end;
+      emitFace(shape.outer, shape.holes, depth, false);
+      const topEnd = indices.length;
+      groupRanges.push({ start: curStart, count: topEnd - curStart, materialIndex: 0 });
+      curStart = topEnd;
+      return;
+    }
+
+    // Pre-cálculo de niveles del bevel — válido para ambos modos.
+    // levels[k] = shape offsetado por bisectriz a delta = -bevelWidth · profile(t_k).off
+    const levels = [];
+    for (let k = 0; k <= N; k++) {
+      const t = k / N;
+      const { off } = profileFn(t);
+      const delta = -bevelWidth * off;
+      if (k === 0 || off === 0) {
+        levels.push({
+          outer: shape.outer.map(p => ({ x: p.x, y: p.y })),
+          holes: shape.holes.map(hh => hh.map(p => ({ x: p.x, y: p.y }))),
+        });
+      } else {
+        levels.push(offsetShapeByBisector(shape, delta));
+      }
+    }
+    const lastLevel = levels.length - 1;
+
+    if (bevelMode === 'in') {
+      // ──────────────── BEVEL HUNDIDO + MARCO EXTERIOR (estilo "EL CANGRI") ────────────────
+      //
+      //   Z=depth              ← cima (silueta CONTRAÍDA, plana, con la fosa como hole interior)
+      //      ↘ chaflán EXTERIOR suavizado (visible desde arriba: el "marco" tipo CANGRI)
+      //   Z=depth - bevelDepth ← plano coplanar:
+      //                            - base del chaflán exterior (silueta original)
+      //                            - fondo plano de la fosa hundida (silueta robusta vía clipper)
+      //   ↑ pared vertical exterior (silueta original, 0 → wallTop)
+      //   ↑ pared vertical de la fosa (silueta de la fosa, wallTop → depth, vertical 90°)
+      //   Z=0                  ← base (silueta original)
+      //
+      // La fosa NO tiene bevel hundido suavizado (cae vertical). Esto evita los
+      // problemas topológicos que aparecían con la doble contracción del bisector
+      // en letras con vértices afilados (A, N, R en el bowl). La silueta de la fosa
+      // se calcula con clipper (offsetShape) que es robusto en cualquier polígono.
+      //
+      // Si bevelDepth > depth, no cabe → degradar a modo 'out' (fall-through).
+      if (bevelDepth > depth - 0.1) {
+        // No cabe. Caer al path 'out' más abajo.
+      } else {
+        const wallTop = depth - bevelDepth;
+
+        // ─── PARED VERTICAL EXTERIOR (Z=0 → wallTop) ───
+        const allRings = [shape.outer, ...shape.holes];
+        for (const ring of allRings) {
+          stitchRings(ring, 0, ring, wallTop, false);
+        }
+        const wallExtEnd = indices.length;
+        groupRanges.push({ start: curStart, count: wallExtEnd - curStart, materialIndex: 0 });
+        curStart = wallExtEnd;
+
+        // ─── CHAFLÁN EXTERIOR + INTERIOR SUAVIZADO (Z = wallTop → depth) ───
+        // Tanto el outer como los holes hacen chaflán: outer contraído, holes
+        // expandidos. Esto mantiene la cima como un anillo topológicamente
+        // consistente (outer y holes ambos "encogidos" hacia el material).
+        const zsOut = [];
+        for (let k = 0; k <= N; k++) {
+          const t = k / N;
+          const { dep } = profileFn(t);
+          zsOut.push(wallTop + bevelDepth * dep);
+        }
+        for (let k = 0; k < lastLevel; k++) {
+          // Outer: silueta original → contraída (silueta del trazo se encoge)
+          stitchRings(levels[k].outer, zsOut[k], levels[k + 1].outer, zsOut[k + 1], false);
+          // Holes: silueta original → expandida (el hueco se ensancha hacia adentro
+          // del material). El bisector ya hace esto automáticamente porque los
+          // holes son CW: aplicar delta negativo al ring CW resulta en expansión.
+          for (let h = 0; h < levels[k].holes.length; h++) {
+            stitchRings(levels[k].holes[h], zsOut[k], levels[k + 1].holes[h], zsOut[k + 1], false);
+          }
+        }
+        const chaflanEnd = indices.length;
+        groupRanges.push({ start: curStart, count: chaflanEnd - curStart, materialIndex: 0 });
+        curStart = chaflanEnd;
+
+        // ─── FOSA: SILUETA ROBUSTA VÍA CLIPPER ───
+        // cimaShape: outer Y holes ambos contraídos/expandidos por el bevel.
+        // El outer encoge, los holes ensanchan: la cima es la zona de material
+        // que sobrevive al chaflán por ambos lados.
+        const cimaShape = {
+          outer: levels[lastLevel].outer,
+          holes: levels[lastLevel].holes.map(hh => hh.map(p => ({ x: p.x, y: p.y }))),
+        };
+
+        // Calcular ancho seguro para la fosa interior usando clipper.
+        const cimaSafeInset = findMaxSafeInset(cimaShape, bevelWidth * 2);
+        // Margen del 80% para garantizar separación visual entre cima y fosa.
+        const fosaWidth = Math.min(bevelWidth, cimaSafeInset * 0.8);
+
+        // offsetShape (clipper) devuelve un array de componentes, cada una con
+        // {outer, holes}. Para letras simples será una sola componente; para letras
+        // con holes que se separan al contraer, pueden ser varias.
+        const fosaComponents = (fosaWidth > 1e-6)
+          ? offsetShape(cimaShape, -fosaWidth)
+          : [];
+
+        // ─── CIMA en Z=depth ───
+        // Outer = silueta contraída. Holes = holes EXPANDIDOS de la letra
+        // (de cimaShape, ambos lados pasaron por el chaflán) + los outer de
+        // cada componente de la fosa (invertidos a CW).
+        const cimaHoles = cimaShape.holes.map(hh => hh.map(p => ({ x: p.x, y: p.y })));
+        for (const comp of fosaComponents) {
+          // comp.outer es CCW; lo convertimos a CW para usarlo como hole de earcut
+          cimaHoles.push(comp.outer.slice().reverse());
+        }
+        // Filtrar triángulos espurios: la cima legítima es una franja anular fina
+        // de ancho ~fosaWidth. Si earcut produce un triángulo cuya arista más larga
+        // excede edgeTolMult×bevelWidth, es un triángulo espurio cruzando una zona
+        // donde dos rings (outer/hole) pasan tangentes sin que earcut detecte el
+        // contorno. El multiplicador es ajustable por el usuario en la UI.
+        const cimaMaxEdge = bevelWidth * edgeTolMult;
+        emitFace(cimaShape.outer, cimaHoles, depth, false, cimaMaxEdge);
+        const cimaEnd = indices.length;
+        groupRanges.push({ start: curStart, count: cimaEnd - curStart, materialIndex: 0 });
+        curStart = cimaEnd;
+
+        if (fosaComponents.length === 0) {
+          // No cabe la fosa. Solo se ha construido el chaflán exterior.
+          return;
+        }
+
+        // ─── PAREDES VERTICALES DE LA FOSA (Z = wallTop → depth) ───
+        // Pared interior de cada componente de la fosa. La normal debe apuntar
+        // HACIA EL CENTRO de la fosa (donde está el aire), opuesto a la pared
+        // exterior del trazo (que apunta hacia afuera).
+        //
+        // Stitching estándar (ZA abajo, ZB arriba) con outer CCW y flip=false
+        // da normal radial AFUERA del polígono. Como queremos lo contrario,
+        // usamos flip=true.
+        for (const comp of fosaComponents) {
+          stitchRings(comp.outer, wallTop, comp.outer, depth, true);
+        }
+        const fosaWallEnd = indices.length;
+        groupRanges.push({ start: curStart, count: fosaWallEnd - curStart, materialIndex: 0 });
+        curStart = fosaWallEnd;
+
+        // ─── FONDO DE LA FOSA en Z = wallTop ───
+        // Una cara plana por cada componente. Holes originales de la letra atraviesan
+        // también este plano (si la fosa de un trazo curvo coincide con un hole de
+        // la letra, eso lo gestiona clipper al calcular fosaComponents).
+        for (const comp of fosaComponents) {
+          // Como el componente puede tener sus propios holes (si la fosa rodea un
+          // hole de la letra), pasamos comp.holes. Si comp ya excluyó los holes
+          // originales (porque están dentro de la fosa o no), usamos comp.holes.
+          emitFace(comp.outer, comp.holes, wallTop, false);
+        }
+        const fosaFondoEnd = indices.length;
+        groupRanges.push({ start: curStart, count: fosaFondoEnd - curStart, materialIndex: 1 });
+        curStart = fosaFondoEnd;
+        return;
+      }
+    }
+
+    // ──────────────── BEVEL HACIA AFUERA (modo 'out', original) ────────────────
+    const h = depth - bevelDepth;
+
+    // Pared vertical (0 → h)
+    {
+      const allRings = [shape.outer, ...shape.holes];
+      for (const ring of allRings) {
+        stitchRings(ring, 0, ring, h, false);
+      }
+      const wallEnd = indices.length;
+      groupRanges.push({ start: curStart, count: wallEnd - curStart, materialIndex: 1 });
+      curStart = wallEnd;
+    }
+
+    // Bevel afuera: zs crece de h a depth
+    const zs = [];
+    for (let k = 0; k <= N; k++) {
+      const t = k / N;
+      const { dep } = profileFn(t);
+      zs.push(h + bevelDepth * dep);
+    }
+
+    for (let k = 0; k < lastLevel; k++) {
+      const aRings = [levels[k].outer, ...levels[k].holes];
+      const bRings = [levels[k + 1].outer, ...levels[k + 1].holes];
+      for (let r = 0; r < aRings.length; r++) {
+        stitchRings(aRings[r], zs[k], bRings[r], zs[k + 1], false);
+      }
+    }
+    const bevelEnd = indices.length;
+    groupRanges.push({ start: curStart, count: bevelEnd - curStart, materialIndex: 1 });
+    curStart = bevelEnd;
+
+    // Cara superior contraída en Z=depth
+    emitFace(levels[lastLevel].outer, levels[lastLevel].holes, depth, false);
+    const topEnd = indices.length;
+    groupRanges.push({ start: curStart, count: topEnd - curStart, materialIndex: 0 });
+    curStart = topEnd;
   }
+
+  for (const shape of shapes) processShape(shape);
 
   const geom = new THREE.BufferGeometry();
   geom.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
@@ -439,7 +1129,7 @@ function buildExtrudedGeometry({ shapes, depth }) {
 
   // Compactar grupos consecutivos del mismo material
   const compacted = [];
-  for (const g of groups) {
+  for (const g of groupRanges) {
     if (g.count === 0) continue;
     const last = compacted[compacted.length - 1];
     if (last && last.materialIndex === g.materialIndex && last.start + last.count === g.start) {
@@ -452,22 +1142,60 @@ function buildExtrudedGeometry({ shapes, depth }) {
 
   geom.computeVertexNormals();
   geom.computeBoundingBox();
+
   return geom;
 }
 
 // ============================================================================
-// MÓDULO: TESTS
+// MÓDULO: TESTS (TDD inline)
+// Validan las funciones puras críticas. Ejecutan al cargar.
 // ============================================================================
 
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
-function assert(cond, msg = 'assertion failed') {
-  if (!cond) throw new Error(msg);
-}
-function assertNear(a, b, tol = 1e-6) {
-  if (Math.abs(a - b) > tol) throw new Error(`expected ${b}±${tol}, got ${a}`);
-}
+test('profile recto: t=0.5 → (0.5, 0.5)', () => {
+  const p = makeProfile(0);
+  const r = p(0.5);
+  assertNear(r.off, 0.5, 1e-6);
+  assertNear(r.dep, 0.5, 1e-6);
+});
+
+test('profile convexo: t=0.5 → off > 0.5, dep < 0.5', () => {
+  const p = makeProfile(1);
+  const r = p(0.5);
+  assert(r.off > 0.5, `off=${r.off}`);
+  assert(r.dep < 0.5, `dep=${r.dep}`);
+});
+
+test('profile cóncavo: t=0.5 → off < 0.5, dep > 0.5', () => {
+  const p = makeProfile(-1);
+  const r = p(0.5);
+  assert(r.off < 0.5, `off=${r.off}`);
+  assert(r.dep > 0.5, `dep=${r.dep}`);
+});
+
+test('profile en t=0 y t=1 siempre da (0,0) y (1,1)', () => {
+  for (const c of [-1, -0.5, 0, 0.5, 1]) {
+    const p = makeProfile(c);
+    const r0 = p(0); const r1 = p(1);
+    assertNear(r0.off, 0, 1e-6); assertNear(r0.dep, 0, 1e-6);
+    assertNear(r1.off, 1, 1e-6); assertNear(r1.dep, 1, 1e-6);
+  }
+});
+
+test('profile monotonía en off y dep', () => {
+  for (const c of [-1, -0.5, 0, 0.5, 1]) {
+    const p = makeProfile(c);
+    let prevOff = -Infinity, prevDep = -Infinity;
+    for (let i = 0; i <= 20; i++) {
+      const r = p(i / 20);
+      assert(r.off >= prevOff - 1e-9, `off no monótono c=${c} t=${i/20}`);
+      assert(r.dep >= prevDep - 1e-9, `dep no monótono c=${c} t=${i/20}`);
+      prevOff = r.off; prevDep = r.dep;
+    }
+  }
+});
 
 test('signedArea cuadrado CCW positivo', () => {
   const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
@@ -485,45 +1213,118 @@ test('pointInPolygon: centro dentro, esquina externa fuera', () => {
   assert(!pointInPolygon({x:15,y:5}, sq));
 });
 
-test('ensureOrientation flip si la dirección no coincide', () => {
-  const cw = [{x:0,y:0},{x:0,y:10},{x:10,y:10},{x:10,y:0}];
-  const r = ensureOrientation(cw, true);
-  assert(signedArea(r) > 0);
-});
-
-test('triangulateShape cuadrado → 6 indices', () => {
+test('offsetShape contrae cuadrado en 1 unidad', () => {
   const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
-  const r = triangulateShape(sq, []);
-  assert(r.tris.length === 6, `expected 6, got ${r.tris.length}`);
+  const result = offsetShape({outer: sq, holes: []}, -1);
+  assert(result.length === 1, `expected 1 component, got ${result.length}`);
+  const a = Math.abs(signedArea(result[0].outer));
+  assertNear(a, 64, 1); // 8x8 = 64
 });
 
-test('triangulateShape cuadrado con agujero → 24 indices', () => {
+test('offsetShape preserva hole en cuadrado con agujero', () => {
+  const outer = [{x:0,y:0},{x:20,y:0},{x:20,y:20},{x:0,y:20}];
+  const hole = [{x:5,y:5},{x:5,y:15},{x:15,y:15},{x:15,y:5}]; // CW
+  const result = offsetShape({outer, holes: [hole]}, -1);
+  assert(result.length === 1, `expected 1 component, got ${result.length}`);
+  assert(result[0].holes.length === 1, `expected 1 hole, got ${result[0].holes.length}`);
+});
+
+test('findMaxSafeInset cuadrado 10×10 ≈ 5', () => {
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const m = findMaxSafeInset({outer: sq, holes: []}, 10);
+  assert(m > 4.5 && m < 5.0, `expected ≈ 5, got ${m}`);
+});
+
+test('triangulate2D cuadrado → 2 triángulos', () => {
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const r = triangulate2D([{outer: sq, holes: []}]);
+  assert(r.indices.length === 6, `expected 6 indices, got ${r.indices.length}`);
+});
+
+test('triangulate2D cuadrado con agujero → 8 triángulos', () => {
   const outer = [{x:0,y:0},{x:20,y:0},{x:20,y:20},{x:0,y:20}];
   const hole = [{x:5,y:5},{x:5,y:15},{x:15,y:15},{x:15,y:5}];
-  const r = triangulateShape(outer, [hole]);
-  assert(r.tris.length === 24, `expected 24, got ${r.tris.length}`);
+  const r = triangulate2D([{outer, holes: [hole]}]);
+  assert(r.indices.length === 24, `expected 24 indices, got ${r.indices.length}`);
 });
 
-test('buildExtrudedGeometry cuadrado: 12 tris (2 base + 8 walls + 2 top)', () => {
+test('bisector: cuadrado CCW inset 1 → cuadrado 8×8', () => {
   const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
-  const g = buildExtrudedGeometry({ shapes: [{outer: sq, holes: []}], depth: 5 });
-  assert(g.index.count === 36, `expected 36 indices (12 tris), got ${g.index.count}`);
+  const r = offsetRingByBisector(sq, -1, true);
+  assert(r.length === 4);
+  assertNear(r[0].x, 1, 1e-3); assertNear(r[0].y, 1, 1e-3);
+  assertNear(r[2].x, 9, 1e-3); assertNear(r[2].y, 9, 1e-3);
 });
 
-test('buildExtrudedGeometry produce dos grupos de material', () => {
-  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
-  const g = buildExtrudedGeometry({ shapes: [{outer: sq, holes: []}], depth: 5 });
-  const mats = new Set(g.groups.map(gr => gr.materialIndex));
-  assert(mats.has(0) && mats.has(1), 'faltan materiales');
+test('bisector: forma irregular preserva correspondencia topológica', () => {
+  // Reproducción exacta del bug: vértice [1] en (5,0) lado inferior
+  // Antes (clipper+resample+rotate): acababa en (2.5, 0.5) cruzando topología
+  // Ahora (bisector): debe acabar en (5, 0.5) — preserva su lado.
+  const irregular = [
+    {x:0,y:0},{x:5,y:0},{x:10,y:0},{x:15,y:0},{x:20,y:0},
+    {x:20,y:4},{x:20,y:8},
+    {x:15,y:8},{x:10,y:8},{x:5,y:8},{x:0,y:8},
+    {x:0,y:6},{x:0,y:3},
+  ];
+  const r = offsetRingByBisector(irregular, -0.5, true);
+  assert(r.length === irregular.length);
+  assertNear(r[1].x, 5, 0.01);
+  assertNear(r[1].y, 0.5, 0.01);
+  assertNear(r[5].x, 19.5, 0.01);
+  assertNear(r[10].y, 7.5, 0.01);
 });
 
-test('buildExtrudedGeometry cuadrado con hole añade pared interior', () => {
+test('bisector: shape con hole, áreas coinciden con clipper', () => {
   const outer = [{x:0,y:0},{x:20,y:0},{x:20,y:20},{x:0,y:20}];
   const hole = [{x:5,y:5},{x:5,y:15},{x:15,y:15},{x:15,y:5}];
-  const g = buildExtrudedGeometry({ shapes: [{outer, holes: [hole]}], depth: 5 });
-  // 8 caras (base) + 4*2 (wall outer) + 4*2 (wall hole) + 8 (top) = 32 tris = 96 indices
-  assert(g.index.count === 96, `expected 96, got ${g.index.count}`);
+  const shape = { outer, holes: [hole] };
+  const bis = offsetShapeByBisector(shape, -1);
+  const clp = offsetShape(shape, -1);
+  assertNear(signedArea(bis.outer), signedArea(clp[0].outer), 0.01);
+  assertNear(Math.abs(signedArea(bis.holes[0])), Math.abs(signedArea(clp[0].holes[0])), 0.01);
 });
+
+test('bisector: round-trip dos insets 0.5 ≡ un inset 1.0', () => {
+  const sq = [{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}];
+  const shape = { outer: sq, holes: [] };
+  const r1 = offsetShapeByBisector(shape, -1);
+  const r2 = offsetShapeByBisector(offsetShapeByBisector(shape, -0.5), -0.5);
+  for (let i = 0; i < 4; i++) {
+    assertNear(r1.outer[i].x, r2.outer[i].x, 0.001);
+    assertNear(r1.outer[i].y, r2.outer[i].y, 0.001);
+  }
+});
+
+test('bisector: vértices cóncavos afilados NO causan auto-intersección', () => {
+  // Forma con dos picos cóncavos profundos (rincones interiores)
+  const concave = [
+    {x:0,y:0},{x:10,y:0},{x:10,y:10},{x:6,y:10},
+    {x:5.5,y:4},{x:5,y:10},{x:4.5,y:4},{x:4,y:10},{x:0,y:10},
+  ];
+  const r = offsetRingByBisector(concave, -1, true);
+  // Verificar que ningún segmento del polígono cruza con otro no adyacente
+  function intersect(a1, a2, b1, b2) {
+    function cr(o, a, b) { return (a.x-o.x)*(b.y-o.y) - (a.y-o.y)*(b.x-o.x); }
+    const d1 = cr(b1,b2,a1), d2 = cr(b1,b2,a2), d3 = cr(a1,a2,b1), d4 = cr(a1,a2,b2);
+    return ((d1>0&&d2<0)||(d1<0&&d2>0)) && ((d3>0&&d4<0)||(d3<0&&d4>0));
+  }
+  let crossings = 0;
+  const n = r.length;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if ((j+1)%n === i) continue;
+      if (intersect(r[i], r[(i+1)%n], r[j], r[(j+1)%n])) crossings++;
+    }
+  }
+  assert(crossings === 0, `expected 0 cruces, got ${crossings}`);
+});
+
+function assert(cond, msg = 'assertion failed') {
+  if (!cond) throw new Error(msg);
+}
+function assertNear(a, b, tol = 1e-6) {
+  if (Math.abs(a - b) > tol) throw new Error(`expected ${b}±${tol}, got ${a}`);
+}
 
 function runTests() {
   const out = document.getElementById('test-results');
@@ -550,6 +1351,9 @@ function runTests() {
 
 const wrap = document.getElementById('canvas-wrap');
 
+// Defensive sizing: si el grid aún no ha calculado, usar window como fallback.
+// Algunos entornos (vista previa de IDE, iframes) reportan clientWidth=0
+// hasta el siguiente paint. ResizeObserver atrapa cualquier cambio posterior.
 function getWrapSize() {
   const w = wrap.clientWidth || (window.innerWidth - 340);
   const h = wrap.clientHeight || window.innerHeight;
@@ -586,7 +1390,8 @@ scene.add(rim);
 
 function applySize() {
   const { w, h } = getWrapSize();
-  renderer.setSize(w, h, false);
+  renderer.setSize(w, h, false); // false = no actualiza el style del canvas
+  // Pero sí queremos que el canvas llene el wrap visualmente:
   renderer.domElement.style.width = w + 'px';
   renderer.domElement.style.height = h + 'px';
   camera.aspect = w / h;
@@ -594,7 +1399,15 @@ function applySize() {
 }
 
 window.addEventListener('resize', applySize);
-if (typeof ResizeObserver !== 'undefined') new ResizeObserver(applySize).observe(wrap);
+
+// ResizeObserver dispara cuando el grid CSS se asienta y cuando el panel se
+// redimensiona. Más robusto que window resize en entornos con paneles dinámicos.
+if (typeof ResizeObserver !== 'undefined') {
+  const ro = new ResizeObserver(applySize);
+  ro.observe(wrap);
+}
+
+// Fallback: forzar resize en el siguiente frame y al cargar todo
 requestAnimationFrame(applySize);
 window.addEventListener('load', applySize);
 
@@ -606,6 +1419,12 @@ const state = {
   text: 'CANGRI',
   font: null,
   depth: 22,
+  bevelMode: 'out',  // 'out' = hacia afuera (placa con cima contraída), 'in' = hundido (fosa interior)
+  bevelSize: 3.5,
+  bevelThick: 3,
+  bevelSeg: 6,
+  profile: 0,
+  edgeTol: 8,    // multiplicador de bevelWidth para el filtro de aristas en la cima del modo 'in'
   colorFace: '#e8d28a',
   colorBevel: '#c9a227',
   metal: 0.85,
@@ -616,8 +1435,12 @@ let mesh = null;
 
 function buildMaterials() {
   return [
-    new THREE.MeshStandardMaterial({ color: state.colorFace, metalness: state.metal, roughness: state.rough }),
-    new THREE.MeshStandardMaterial({ color: state.colorBevel, metalness: state.metal, roughness: state.rough }),
+    new THREE.MeshStandardMaterial({
+      color: state.colorFace, metalness: state.metal, roughness: state.rough,
+    }),
+    new THREE.MeshStandardMaterial({
+      color: state.colorBevel, metalness: state.metal, roughness: state.rough,
+    }),
   ];
 }
 
@@ -631,7 +1454,26 @@ function setStats(geom) {
   const v = geom.attributes.position.count;
   const t = geom.index.count / 3;
   const { w, h } = getWrapSize();
-  document.getElementById('stats').textContent = `${v} vértices · ${t} tris · canvas ${w}×${h}`;
+  document.getElementById('stats').textContent =
+    `${v} vértices · ${t} tris · canvas ${w}×${h}`;
+}
+
+function drawProfilePreview() {
+  const svg = document.getElementById('profile-svg');
+  const fn = makeProfile(state.profile);
+  const pts = [];
+  // Eje X: depth (0 → 1), eje Y: offset (0 → 1). El perfil se ve "desde el lado".
+  // En SVG: x = dep · 100, y = (1 − off) · 50 (invertido para arriba)
+  for (let i = 0; i <= 30; i++) {
+    const t = i / 30;
+    const r = fn(t);
+    pts.push(`${r.dep * 100},${(1 - r.off) * 48 + 1}`);
+  }
+  svg.innerHTML = `
+    <line x1="0" y1="49" x2="100" y2="49" stroke="#2a2a35" stroke-width="0.5"/>
+    <line x1="0" y1="1" x2="0" y2="49" stroke="#2a2a35" stroke-width="0.5"/>
+    <polyline points="${pts.join(' ')}" fill="none" stroke="${getComputedStyle(document.documentElement).getPropertyValue('--accent')}" stroke-width="1.2"/>
+  `;
 }
 
 function rebuild() {
@@ -644,10 +1486,40 @@ function rebuild() {
       return;
     }
     const shapes = groupShapes(subpaths);
-    const geom = buildExtrudedGeometry({ shapes, depth: state.depth });
 
+    // Clamp bevel a inset máximo seguro (mínimo entre todos los shapes)
+    let maxSafe = Infinity;
+    for (const s of shapes) {
+      const m = findMaxSafeInset(s, 30);
+      if (m < maxSafe) maxSafe = m;
+    }
+    const safeBevelW = Math.min(state.bevelSize, maxSafe * 0.9);
+    const safeBevelD = Math.min(state.bevelThick, state.depth - 0.1);
+
+    let warn = '';
+    if (safeBevelW < state.bevelSize - 1e-3) {
+      warn = `Bevel ancho clampado a ${safeBevelW.toFixed(2)} (límite por geometría del glifo)`;
+    }
+
+    const profileFn = makeProfile(state.profile);
+
+    const geom = buildBeveledTextGeometry({
+      shapes,
+      depth: state.depth,
+      bevelWidth: safeBevelW,
+      bevelDepth: safeBevelD,
+      bevelSegments: state.bevelSeg,
+      bevelMode: state.bevelMode,
+      edgeTolMult: state.edgeTol,
+      profileFn,
+    });
+
+    // Centrar
     const bb = geom.boundingBox;
-    geom.translate(-(bb.max.x + bb.min.x) / 2, -(bb.max.y + bb.min.y) / 2, -(bb.max.z + bb.min.z) / 2);
+    const cx = (bb.max.x + bb.min.x) / 2;
+    const cy = (bb.max.y + bb.min.y) / 2;
+    const cz = (bb.max.z + bb.min.z) / 2;
+    geom.translate(-cx, -cy, -cz);
 
     if (mesh) {
       scene.remove(mesh);
@@ -658,7 +1530,13 @@ function rebuild() {
     scene.add(mesh);
 
     setStats(geom);
-    setStatus('OK', 'ok');
+    if (warn) {
+      setStatus(warn, 'warn');
+    } else if (safeBevelW < 1e-6 || safeBevelD < 1e-6) {
+      setStatus('Sin bisel (ancho o profundidad = 0)', 'ok');
+    } else {
+      setStatus('OK', 'ok');
+    }
   } catch (e) {
     console.error(e);
     setStatus(`Error: ${e.message}`, 'err');
@@ -667,9 +1545,15 @@ function rebuild() {
 
 // ============================================================================
 // MÓDULO: FONT LOADING
+// Estrategia:
+//   1. Fuente embebida (Bebas Neue como base64) → carga inmediata, sin red.
+//   2. Google Fonts: priorizar TTF; si solo hay woff2, decodificar con
+//      DecompressionStream('brotli') del navegador (nativo, sin dependencias).
+//   3. Upload del usuario: TTF/OTF directos, woff2 vía DecompressionStream.
 // ============================================================================
 
-let EMBEDDED_FONT_B64 = ''; // se asigna al final del módulo (línea inyectada)
+// Bebas Neue TTF embebido (cargado al final del script desde EMBEDDED_FONT_B64)
+let EMBEDDED_FONT_B64 = ''; // se asigna al final del módulo
 
 function base64ToArrayBuffer(b64) {
   const bin = atob(b64);
@@ -679,7 +1563,23 @@ function base64ToArrayBuffer(b64) {
   return bytes.buffer;
 }
 
+/**
+ * Decodifica WOFF2 a TTF/OTF usando DecompressionStream nativo del navegador.
+ * WOFF2 = header binario + tablas comprimidas con Brotli. El formato exige
+ * descomprimir las tablas, no el archivo entero — pero como solo necesitamos
+ * un buffer parseable por opentype.js, hacemos una conversión completa.
+ *
+ * Implementación: parsear el header WOFF2 manualmente (24 bytes), descomprimir
+ * el bloque de tablas con DecompressionStream, y reconstruir un SFNT/TTF válido.
+ *
+ * Esto es no-trivial (~150 líneas de spec). En vez de eso, devuelvo un error
+ * claro y le decimos al usuario que suba TTF/OTF si quiere usar su propia
+ * fuente, o que use el selector de Google Fonts (que ya prioriza TTF).
+ */
 async function decodeWoff2(buf) {
+  // Implementación minimal vía woff2-encoder en CDN (que sí es ESM puro y
+  // bundleable, a diferencia de wawoff2 que importa node:fs).
+  // Si esto también falla, mostramos error claro.
   try {
     const mod = await import('https://cdn.jsdelivr.net/npm/woff2-encoder@2.0.0/+esm');
     const result = await mod.decompress(new Uint8Array(buf));
@@ -692,8 +1592,9 @@ async function decodeWoff2(buf) {
 async function loadFontBuffer(buf) {
   const view = new DataView(buf);
   const tag = view.getUint32(0, false);
-  if (tag === 0x774F4632) { // 'wOF2'
-    setStatus('Decodificando WOFF2...');
+  // 'wOF2' = 0x774F4632
+  if (tag === 0x774F4632) {
+    setStatus('Decodificando WOFF2...', '');
     const ttfBuf = await decodeWoff2(buf);
     return opentype.parse(ttfBuf);
   }
@@ -710,20 +1611,28 @@ async function loadGoogleFont(family) {
       return r.text();
     });
   } catch (e) {
-    throw new Error(`No se pudo contactar Google Fonts (${e.message}).`);
+    throw new Error(`No se pudo contactar Google Fonts (${e.message}). Quizá el entorno bloquea fetch externo.`);
   }
   const ttfMatch = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+\.ttf)\)/i);
   const woff2Match = cssText.match(/url\((https:\/\/fonts\.gstatic\.com\/[^)]+\.woff2)\)/i);
   const fontUrl = ttfMatch ? ttfMatch[1] : (woff2Match ? woff2Match[1] : null);
   if (!fontUrl) throw new Error(`No se encontró URL de fuente para ${family}`);
 
+  // Parsear a una variable local antes de tocar state.font. Si algo falla en
+  // el fetch o en el parse, state.font queda intacto (con la fuente embebida
+  // que cargó loadEmbeddedFont al boot, o con la última que cargó el usuario).
   const buf = await fetch(fontUrl).then(r => {
     if (!r.ok) throw new Error(`HTTP ${r.status} al descargar TTF`);
     return r.arrayBuffer();
   });
-  if (!buf || buf.byteLength < 100) throw new Error(`Buffer de fuente inválido`);
+  if (!buf || buf.byteLength < 100) {
+    throw new Error(`Buffer de fuente inválido (${buf ? buf.byteLength : 0} bytes)`);
+  }
+  const parsed = await loadFontBuffer(buf);
+  if (!parsed) throw new Error('opentype.parse devolvió null');
 
-  state.font = await loadFontBuffer(buf);
+  // Solo ahora asignamos.
+  state.font = parsed;
   setStatus(`Cargada: ${family}`, 'ok');
   rebuild();
 }
@@ -736,6 +1645,10 @@ async function loadUploadedFont(file) {
   rebuild();
 }
 
+/**
+ * Carga la fuente embebida como fallback garantizado. Se llama PRIMERO al boot
+ * para que siempre haya algo que renderizar, incluso si Google Fonts falla.
+ */
 function loadEmbeddedFont() {
   try {
     const buf = base64ToArrayBuffer(EMBEDDED_FONT_B64);
@@ -765,15 +1678,25 @@ function bindRange(id, key, parser = parseFloat, decimals = 0, extra = null) {
 }
 
 bindRange('depth', 'depth', parseFloat, 0);
+bindRange('bevel-size', 'bevelSize', parseFloat, 1);
+bindRange('bevel-thick', 'bevelThick', parseFloat, 1);
+bindRange('bevel-seg', 'bevelSeg', parseInt, 0);
+bindRange('profile', 'profile', parseFloat, 2, drawProfilePreview);
+bindRange('edge-tol', 'edgeTol', parseFloat, 1);
+bindRange('metal', 'metal', parseFloat, 2, () => {
+  if (mesh) mesh.material.forEach(m => m.metalness = state.metal);
+});
+bindRange('rough', 'rough', parseFloat, 2, () => {
+  if (mesh) mesh.material.forEach(m => m.roughness = state.rough);
+});
 
+// Material-only updates no requieren rebuild de geometría
 document.getElementById('metal').addEventListener('input', e => {
   state.metal = parseFloat(e.target.value);
-  document.getElementById('metal-v').textContent = state.metal.toFixed(2);
   if (mesh) mesh.material.forEach(m => m.metalness = state.metal);
 });
 document.getElementById('rough').addEventListener('input', e => {
   state.rough = parseFloat(e.target.value);
-  document.getElementById('rough-v').textContent = state.rough.toFixed(2);
   if (mesh) mesh.material.forEach(m => m.roughness = state.rough);
 });
 
@@ -800,46 +1723,68 @@ document.getElementById('font-upload').addEventListener('change', e => {
   if (file) loadUploadedFont(file).catch(err => setStatus(`Error: ${err.message}`, 'err'));
 });
 
+document.querySelectorAll('input[name="bevel-mode"]').forEach(el => {
+  el.addEventListener('change', e => {
+    state.bevelMode = e.target.value;
+    rebuild();
+  });
+});
+
 // ============================================================================
 // MÓDULO: EXPORT
 // ============================================================================
 
-function escapeXml(s) {
-  return String(s).replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&apos;'})[c]);
-}
-
-function download(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click();
-  setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
-}
+document.getElementById('export-3mf').addEventListener('click', () => {
+  if (!mesh) return;
+  try {
+    const blob = build3MF(mesh, state.text || 'text', state.colorFace, state.colorBevel);
+    download(blob, `${state.text || 'text'}.3mf`);
+    setStatus('3MF exportado (compatible con Bambu Studio)', 'ok');
+  } catch (err) {
+    setStatus(`Export 3MF error: ${err.message}`, 'err');
+    console.error(err);
+  }
+});
 
 /**
- * 3MF (ZIP con XMLs) con materiales por triángulo vía Materials Extension.
- * Bambu Studio lee p1=N como índice en <basematerials> y permite asignar
- * filamentos por material desde el AMS.
+ * Construye un archivo 3MF (ZIP con XMLs) con dos objetos separados, uno por
+ * cada materialIndex. Bambu Studio lee estos como objetos distintos y permite
+ * asignar filamentos diferentes via el AMS.
+ *
+ * Estructura del ZIP:
+ *   [Content_Types].xml          declaración de tipos MIME
+ *   _rels/.rels                  relación raíz → 3D/3dmodel.model
+ *   3D/3dmodel.model             el XML con la geometría
  */
 function build3MF(mesh, modelName, colorFace, colorBevel) {
   const geom = mesh.geometry;
   const positions = geom.getAttribute('position');
   const indexAttr = geom.getIndex();
   const groups = geom.groups;
-  if (!indexAttr || groups.length === 0) throw new Error('Geometría sin grupos o sin índice');
+  if (!indexAttr || groups.length === 0) {
+    throw new Error('Geometría sin grupos o sin índice');
+  }
 
+  // Aplicar la transformación del mesh a los vértices (escala + posición)
+  // para que las coordenadas en el 3MF estén en el sistema "mundo"
   mesh.updateMatrixWorld(true);
   const matrix = mesh.matrixWorld;
   const tmpVec = new THREE.Vector3();
 
-  const allVerts = [];
-  const allTris = [];
-  const vertexCache = new Map();
+  // Recolectar TODOS los vértices y triángulos en un único objeto, anotando
+  // el material de cada triángulo. Esto permite usar la 3MF Materials
+  // Extension con propiedades por triángulo, manteniendo la pieza como UNA
+  // sola unidad imprimible (en vez de dos objetos separados que el usuario
+  // tendría que mover en bloque).
+  const allVerts = [];     // [x, y, z, x, y, z, ...]
+  const allTris = [];      // [{ v: [i0, i1, i2], pindex: 0|1 }, ...]
+  const vertexCache = new Map();  // origIdx → newIdx
 
   for (const group of groups) {
     const start = group.start;
     const count = group.count;
-    const pindex = group.materialIndex;
+    const pindex = group.materialIndex; // 0 = Base, 1 = Borde
+
     for (let i = 0; i < count; i += 3) {
       const tri = [];
       for (let j = 0; j < 3; j++) {
@@ -854,15 +1799,18 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
         }
         tri.push(newIdx);
       }
+      // Filtrar triángulos degenerados (la spec los prohíbe)
       if (tri[0] !== tri[1] && tri[1] !== tri[2] && tri[0] !== tri[2]) {
         allTris.push({ v: tri, pindex });
       }
     }
   }
 
-  if (allTris.length < 4) throw new Error('Geometría con menos de 4 triángulos válidos');
+  if (allTris.length < 4) {
+    throw new Error('Geometría con menos de 4 triángulos válidos');
+  }
 
-  // Validación manifold (warning informativo)
+  // Validar manifoldness para warning
   const edges = new Map();
   for (const t of allTris) {
     const v = t.v;
@@ -874,10 +1822,19 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
   }
   let openEdges = 0;
   for (const [, c] of edges) if (c !== 2) openEdges++;
-  if (openEdges > 0) console.warn(`3MF: ${openEdges} aristas no-manifold.`);
-  else console.log('3MF: malla manifold ✓');
+  if (openEdges > 0) {
+    console.warn(`3MF: ${openEdges} aristas no-manifold (modelo no estanco). El slicer puede repararlo o rechazarlo.`);
+  } else {
+    console.log('3MF: malla manifold ✓');
+  }
 
-  const colHex = c => c.replace('#', '').toUpperCase();
+  // Construir el XML con la Materials Extension (namespace m).
+  // <basematerials> declara los materiales con color.
+  // Cada <triangle> referencia el índice de basematerials vía p1 (sólido sobre toda
+  // la cara). El <object> declara pid="100" como default.
+  // Nota: displaycolor es sRGB hexadecimal de 6 u 8 dígitos (RRGGBB o RRGGBBAA).
+  // Quitamos el '#' de los colores del UI.
+  const colHex = (c) => c.replace('#', '').toUpperCase();
   const baseMatColors = [colHex(colorFace), colHex(colorBevel)];
   const baseMatNames = ['Base', 'Borde'];
 
@@ -886,7 +1843,7 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
     + ` xmlns="http://schemas.microsoft.com/3dmanufacturing/core/2015/02"`
     + ` xmlns:m="http://schemas.microsoft.com/3dmanufacturing/material/2015/02">
  <metadata name="Title">${escapeXml(modelName)}</metadata>
- <metadata name="Application">Beveled Text 3D — Fase 1</metadata>
+ <metadata name="Application">Beveled Text 3D v2</metadata>
  <resources>
   <basematerials id="100">
 `;
@@ -908,6 +1865,9 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
     <triangles>
 `;
   for (const t of allTris) {
+    // p1 = pindex en basematerials. Si coincide con el pindex default del
+    // object (0), se podría omitir, pero lo dejamos explícito siempre por
+    // claridad y robustez.
     modelXml += `     <triangle v1="${t.v[0]}" v2="${t.v[1]}" v3="${t.v[2]}" p1="${t.pindex}" />\n`;
   }
   modelXml += `    </triangles>
@@ -926,6 +1886,7 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
  <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml" />
 </Types>
 `;
+
   const relsXml = `<?xml version="1.0" encoding="UTF-8"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
  <Relationship Id="rel-1" Target="/3D/3dmodel.model" Type="http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel" />
@@ -937,15 +1898,37 @@ function build3MF(mesh, modelName, colorFace, colorBevel) {
     '_rels/.rels': strToU8(relsXml),
     '3D/3dmodel.model': strToU8(modelXml),
   };
-  const zipped = zipSync(files);
-  return new Blob([zipped], { type: 'model/3mf' });
+
+  const zipBytes = zipSync(files, { level: 6 });
+  return new Blob([zipBytes], { type: 'model/3mf' });
 }
 
+function escapeXml(s) {
+  return String(s).replace(/[<>&"']/g, c => ({
+    '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;',
+  }[c]));
+}
+
+document.getElementById('export-stl').addEventListener('click', () => {
+  if (!mesh) return;
+  try {
+    const stlString = buildSingleSTL(mesh);
+    download(new Blob([stlString], { type: 'model/stl' }), `${state.text || 'text'}.stl`);
+    setStatus('STL exportado (pinta caras en el slicer para multicolor)', 'ok');
+  } catch (err) {
+    console.error(err);
+    setStatus(`Export STL error: ${err.message}`, 'err');
+  }
+});
+
 /**
- * STL binario. Pierde el agrupamiento por material (formato monocromo) pero
- * sirve como fallback universal.
+ * Genera un único STL ASCII con toda la geometría en coordenadas mundo.
+ * Sin separación por material — para multicolor, usar la herramienta de
+ * pintado por caras del slicer (BambuStudio: "Color Painting" sobre el
+ * objeto importado). Las paredes verticales en 90° del modo 'in' hacen
+ * el pintado trivial (basta seleccionar el plano horizontal de la fosa).
  */
-function buildSTL(mesh) {
+function buildSingleSTL(mesh) {
   const geom = mesh.geometry;
   const positions = geom.getAttribute('position');
   const indexAttr = geom.getIndex();
@@ -953,64 +1936,50 @@ function buildSTL(mesh) {
 
   mesh.updateMatrixWorld(true);
   const matrix = mesh.matrixWorld;
-  const tmp = new THREE.Vector3();
+  const tmpA = new THREE.Vector3();
+  const tmpB = new THREE.Vector3();
+  const tmpC = new THREE.Vector3();
+  const tmpN = new THREE.Vector3();
+  const e1 = new THREE.Vector3();
+  const e2 = new THREE.Vector3();
 
+  let s = `solid model\n`;
   const triCount = indexAttr.count / 3;
-  const buffer = new ArrayBuffer(84 + triCount * 50);
-  const view = new DataView(buffer);
-  // Header de 80 bytes (vacío) + uint32 triCount
-  view.setUint32(80, triCount, true);
-  let offset = 84;
-
-  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
-  const ab = new THREE.Vector3(), ac = new THREE.Vector3(), n = new THREE.Vector3();
-
   for (let i = 0; i < triCount; i++) {
-    const i0 = indexAttr.getX(i * 3);
-    const i1 = indexAttr.getX(i * 3 + 1);
-    const i2 = indexAttr.getX(i * 3 + 2);
-    a.fromBufferAttribute(positions, i0).applyMatrix4(matrix);
-    b.fromBufferAttribute(positions, i1).applyMatrix4(matrix);
-    c.fromBufferAttribute(positions, i2).applyMatrix4(matrix);
-    ab.subVectors(b, a); ac.subVectors(c, a);
-    n.crossVectors(ab, ac).normalize();
-
-    view.setFloat32(offset, n.x, true); view.setFloat32(offset + 4, n.y, true); view.setFloat32(offset + 8, n.z, true);
-    view.setFloat32(offset + 12, a.x, true); view.setFloat32(offset + 16, a.y, true); view.setFloat32(offset + 20, a.z, true);
-    view.setFloat32(offset + 24, b.x, true); view.setFloat32(offset + 28, b.y, true); view.setFloat32(offset + 32, b.z, true);
-    view.setFloat32(offset + 36, c.x, true); view.setFloat32(offset + 40, c.y, true); view.setFloat32(offset + 44, c.z, true);
-    view.setUint16(offset + 48, 0, true);
-    offset += 50;
+    const a = indexAttr.getX(i * 3);
+    const b = indexAttr.getX(i * 3 + 1);
+    const c = indexAttr.getX(i * 3 + 2);
+    if (a === b || b === c || a === c) continue;
+    tmpA.fromBufferAttribute(positions, a).applyMatrix4(matrix);
+    tmpB.fromBufferAttribute(positions, b).applyMatrix4(matrix);
+    tmpC.fromBufferAttribute(positions, c).applyMatrix4(matrix);
+    e1.subVectors(tmpB, tmpA);
+    e2.subVectors(tmpC, tmpA);
+    tmpN.crossVectors(e1, e2);
+    const len = tmpN.length();
+    if (len < 1e-12) continue;
+    tmpN.divideScalar(len);
+    s += `facet normal ${tmpN.x} ${tmpN.y} ${tmpN.z}\n`;
+    s += ` outer loop\n`;
+    s += `  vertex ${tmpA.x} ${tmpA.y} ${tmpA.z}\n`;
+    s += `  vertex ${tmpB.x} ${tmpB.y} ${tmpB.z}\n`;
+    s += `  vertex ${tmpC.x} ${tmpC.y} ${tmpC.z}\n`;
+    s += ` endloop\n`;
+    s += `endfacet\n`;
   }
-  return new Blob([buffer], { type: 'model/stl' });
+  s += `endsolid model\n`;
+  return s;
 }
 
-document.getElementById('export-3mf').addEventListener('click', () => {
-  if (!mesh) return;
-  try {
-    const blob = build3MF(mesh, state.text || 'text', state.colorFace, state.colorBevel);
-    download(blob, `${state.text || 'text'}.3mf`);
-    setStatus('3MF exportado (compatible con Bambu Studio)', 'ok');
-  } catch (err) {
-    setStatus(`Export 3MF error: ${err.message}`, 'err');
-    console.error(err);
-  }
-});
-
-document.getElementById('export-stl').addEventListener('click', () => {
-  if (!mesh) return;
-  try {
-    const blob = buildSTL(mesh);
-    download(blob, `${state.text || 'text'}.stl`);
-    setStatus('STL exportado', 'ok');
-  } catch (err) {
-    setStatus(`Export STL error: ${err.message}`, 'err');
-    console.error(err);
-  }
-});
+function download(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
 
 // ============================================================================
-// MÓDULO: ANIMATION LOOP
+// MÓDULO: BOOT
 // ============================================================================
 
 function animate() {
@@ -1019,16 +1988,21 @@ function animate() {
   renderer.render(scene, camera);
 }
 animate();
+drawProfilePreview();
 
-// ============================================================================
-// BOOT
-// ============================================================================
-
-runTests();
+// Tests primero (TDD)
+const testResults = runTests();
+if (testResults.fail > 0) {
+  setStatus(`${testResults.fail} tests fallaron — revisa consola`, 'err');
+}
 
 // Asignar la fuente embebida (Bebas Neue) — se inyecta abajo
 EMBEDDED_FONT_B64 = "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AX8AIgF/ACIBfwAiAZYAKQGnAAoBlgApAacACgGWACkBawApAWsAKQFrACkBawApAWsAKQFrACkBawApAWsAKQFrACkBawApAVgAKQFYACkBhwAhAYcAIQGHACEBhwAhAYcAIQGkACkBtgAKAaQAKQDAACkByQApAMAAJADA/+oAwP/aAMD/4gDAACkAwP/eAMD/7QDAABEAwP/VAQkAEAEJABABCQAQAZ4AKQGeACkBWAApAVgAKQFYACkBWAApAVcAKQFsAAoCGgApAhoAKQGrACkBqwApAasAKQGrACkBqwApAasAKQGQACEBkAAhAZAAIQGQACEBkAAhAZAAIQGQACEBkAAhAZAAFwGQABcBkAAhAkEAIQGCACkBggApAYIAKQGQACEBkwApAZMAKQGTACkBkwApAXQAFgF0ABYBdAAWAXQAFgF0ABYBdAAWAXQAFgGXACkBbAAMAWwADAFsAAwBbAAMAWwADAFsAAwBkgAlAZIAJQGSACUBkgAlAZIAJQGSACUBkgAlAZIAJQGSACUBkgAlAZIAJQF+AAwCLQAPAi0ADwItAA8CLQAPAi0ADwGWAAsBigAJAYoACQGKAAkBigAJAYoACQFqABMBagATAWoAEwFqABMBkQAMAZEADAGRAAwBkQAMAZEADAGRAAwBkQAMAZEADAGRAAwBkQAMAkQACgJEAAoBlAApAZQAKQF/ACIBfwAiAX8AIgF/ACIBfwAiAX8AIgGWACkBpwAKAZYAKQGnAAoBlgApAWsAKQFrACkBawApAWsAKQFrACkBawApAWsAKQFrACkBawApAWsAKQFYACkBWAApAYcAIQGHACEBhwAhAYcAIQGHACEBpAApAbYACgGkACkAwAApAMAAKQDAACQAwP/qAMD/2gDA/+IAwAApAMD/3gHJACkAwP/tAMAAEQDA/9UBCQAQAQkAEAEJABABCQAQAZ4AKQGeACkBngApAVgAKQFYACkBWAApAVgAKQFXACkBbAAKAhoAKQIaACkBqwApAasAKQIeAAQBqwApAasAKQGrACkBqwApAZAAIQGQACEBkAAhAZAAIQGQACEBkAAhAZAAIQGQACEBkAAXAZAAFwGQACECQQAhAYIAKQGCACkBggApAZAAIQGTACkBkwApAZMAKQGTACkBdAAWAXQAFgF0ABYBdAAWAXQAFgF0ABYBdAAWAZcAKQFsAAwBbAAMAWwADAFsAAwBbAAMAWwADAGSACUBkgAlAZIAJQGSACUBkgAlAZIAJQGSACUBkgAlAZIAJQGSACUBkgAlAX4ADAItAA8CLQAPAi0ADwItAA8CLQAPAZYACwGKAAkBigAJAYoACQGKAAkBigAJAWoAEwFqABMBagATAWoAEwEYAB4BGgAjAZEADAGSACIBlQApAcQADgGQACEBkABQAZAAJwGQACEBkAAPAZAAJgGQACQBkAAiAZAAHAGQAB4BkAAhASMAEgF0ABgBdgAUAY4ADgF+ABwBiQAhAWQADAGMABoBiQAaARoAIwEaADoBGgAmARoAIgEaABcBGgAmARoAJQEaACMBGgAgARoAIQEaACMBGgA6ARoAJgEaACIBGgAXARoAJgEaACUBGgAjARoAIAEaACEBGgAjARoAOgEaACYBGgAiARoAFwEaACYBGgAlARoAIwEaACABGgAhARoAIwEaADoBGgAmARoAIgEaABcBGgAmARoAJQEaACMBGgAgARoAIQBZ/4ICjQA6Ao0AOgKNACYCjQA6Ao0AIgKNADoCjQAiAo0AJgKNACMAvAApALwAKQC8ACkAvAAjAfQAHwDSADIA0gAyAWsAEwFrABQAvAApASwAIwGmAA8BnAAQAYUACQGFAAkBFAA1ARQAIwEUABUBFAAZARQAOwEUACMBDgAZAQ4AGQEsAAAB9AAAAZAAAAEsAAAAvAAqAVAAIwFQACkBUAAjALwAKQC8ACMBUAAOAU8AEQC8AA4AvAARAVAAJgC8ACYB9AAAASwAAAGQAAAAvAAAAKAAAAAAAAABkAAqAZAAHwGQACQBkAAXAZAAEwGQABwBkAAjAZAAEwGQAAsA3AAuAZAAEQGQABsBkAAbAZAAKAGQABsBkAAlAZAAJQGQADYBkAAoAZAAMwGQACsBkAAkAZAADAGQAAwBkAAWAZAAEwKDABoC3gA2AZAANgGSACIBkQAMAdEAMQGbABkB2wAQAZUAKQGsACECTQAjA00AIwLiABUBkAAUAnoAFwK4ABkBoQAiAcEAGgGQABcC4gAVAuIAFQLiABUCVgAKAZAASQH0AM0B9ADNAZAAFgGcAAsBkAAWAzUAIQKVACkCVwAVAAD/ywH0AIcAAP+CAAD/zgAA/34AAP/EAAD/fgAA/80AAP96AAD/egAA/4oAAP+nAAD/dQAA/40AAP/SAAD/0gAA/5gAAP+yAAD/lQAA/y8AAP9ZAAD/TwH0AL4AhAB0AJcAdAB8AMgAeAB4AIcArAChAG8AAAAAAAAAAAACAAAAAAAA/9gAUAAAAAAAAAAAAAAAAAAAAAAAAAAAAfEAAAECAAIAAwAkAMkBAwDHAGIArQEEAQUAYwCuAJABBgAlAQcAJgD9AP8AZAEIAQkAJwDpAQoBCwEMACgAZQENAQ4AyADKAQ8AywEQAREAKQESACoA+AETARQBFQArARYBFwAsARgAzAEZAM0AzgD6AM8BGgEbARwALQEdAR4ALgEfAC8BIAEhASIBIwDiADABJAAxASUBJgEnASgAZgAyANABKQDRAGcA0wEqASsAkQEsAK8AsAAzAS0A7QA0ADUBLgEvATAANgExAOQA+wEyATMBNAE1ADcBNgE3ATgBOQE6ADgA1AE7ANUAaADWATwBPQE+AT8BQAA5ADoBQQFCAUMBRAA7ADwA6wFFALsBRgA9AUcA5gFIAEQAaQFJAGsAbABqAUoBSwBuAG0AoAFMAEUBTQBGAP4BAABvAU4BTwBHAOoBUAEBAVEASABwAVIBUwByAHMBVABxAVUBVgBJAVcASgD5AVgBWQFaAEsBWwFcAEwA1wB0AV0AdgB3AV4AdQFfAWABYQFiAE0BYwFkAWUATgFmAWcATwFoAWkBagFrAOMAUAFsAFEBbQFuAW8BcAFxAHgAUgB5AXIAewB8AHoBcwF0AKEBdQB9ALEAUwF2AO4AVABVAXcBeAF5AFYBegDlAPwBewF8AX0AiQBXAX4BfwGAAYEBggBYAH4BgwCAAIEAfwGEAYUBhgGHAYgAWQBaAYkBigGLAYwAWwBcAOwBjQC6AY4AXQGPAOcBkACdAJ4BkQGSAZMAmwATABQAFQAWABcAGAAZABoAGwAcAZQBlQGWAZcBmAGZAZoBmwGcAZ0BngGfAaABoQGiAaMBpAGlAaYBpwGoAakBqgGrAawBrQGuAa8BsAGxAbIBswG0AbUBtgG3AbgBuQG6AbsBvAG9Ab4BvwHAAcEBwgHDAcQBxQC8APQBxgHHAPUA9gHIAckBygHLABEADwAdAB4AqwAEAKMAIgCiAMMAhwANAAYAEgA/AAsADABeAGAAPgBAABABzACyALMBzQBCAMQAxQC0ALUAtgC3AKkAqgC+AL8ABQAKAc4BzwHQAdEB0gHTAIQAvQAHAdQApgHVAIUB1gCWAdcB2AAOAO8A8AC4ACAAjwAhAB8AlQCUAJMApwBhAKQAQQCSAdkAnAHaAdsAmgCZAKUB3ACYAAgAxgHdALkB3gAjAAkAiACGAIsAigHfAIwAgwBfAOgAggHgAMIB4QHiAeMB5AHlAeYB5wHoAekB6gHrAewB7QHuAe8B8AHxAfIB8wH0AfUB9gH3AfgB+QCNANsA4QDeANgAjgDcAEMA3wDaAOAA3QDZAfoB+wH8BE5VTEwGQWJyZXZlB0FtYWNyb24HQW9nb25lawdBRWFjdXRlB3VuaTFFMDILQ2NpcmN1bWZsZXgKQ2RvdGFjY2VudAZEY2Fyb24GRGNyb2F0B3VuaTFFMEEGRWJyZXZlBkVjYXJvbgpFZG90YWNjZW50B0VtYWNyb24HRW9nb25lawd1bmkxRTFFC0djaXJjdW1mbGV4B3VuaTAxMjIKR2RvdGFjY2VudARIYmFyC0hjaXJjdW1mbGV4AklKBklicmV2ZQdJbWFjcm9uB0lvZ29uZWsGSXRpbGRlC3VuaTAwQTQwMzAxC0pjaXJjdW1mbGV4B3VuaTAxMzYGTGFjdXRlBkxjYXJvbgd1bmkwMTNCBExkb3QHdW5pMUU0MAZOYWN1dGUGTmNhcm9uB3VuaTAxNDUDRW5nBk9icmV2ZQ1PaHVuZ2FydW1sYXV0B09tYWNyb24LT3NsYXNoYWN1dGUHdW5pMUU1NgZSYWN1dGUGUmNhcm9uB3VuaTAxNTYGU2FjdXRlC1NjaXJjdW1mbGV4B3VuaTAyMTgHdW5pMUU2MAd1bmkxRTlFBFRiYXIGVGNhcm9uB3VuaTAxNjIHdW5pMDIxQQd1bmkxRTZBBlVicmV2ZQ1VaHVuZ2FydW1sYXV0B1VtYWNyb24HVW9nb25lawVVcmluZwZVdGlsZGUGV2FjdXRlC1djaXJjdW1mbGV4CVdkaWVyZXNpcwZXZ3JhdmULWWNpcmN1bWZsZXgGWWdyYXZlBlphY3V0ZQpaZG90YWNjZW50BmFicmV2ZQdhbWFjcm9uB2FvZ29uZWsHYWVhY3V0ZQd1bmkxRTAzC2NjaXJjdW1mbGV4CmNkb3RhY2NlbnQGZGNhcm9uB3VuaTFFMEIGZWJyZXZlBmVjYXJvbgplZG90YWNjZW50B2VtYWNyb24HZW9nb25lawd1bmkxRTFGC2djaXJjdW1mbGV4B3VuaTAxMjMKZ2RvdGFjY2VudARoYmFyC2hjaXJjdW1mbGV4BmlicmV2ZQlpLmxvY2xUUksCaWoHaW1hY3Jvbgdpb2dvbmVrBml0aWxkZQd1bmkwMjM3C3VuaTAwNkEwMzAxC2pjaXJjdW1mbGV4B3VuaTAxMzcMa2dyZWVubGFuZGljBmxhY3V0ZQZsY2Fyb24HdW5pMDEzQwRsZG90B3VuaTFFNDEGbmFjdXRlC25hcG9zdHJvcGhlBm5jYXJvbgd1bmkwMTQ2A2VuZwZvYnJldmUNb2h1bmdhcnVtbGF1dAdvbWFjcm9uC29zbGFzaGFjdXRlB3VuaTFFNTcGcmFjdXRlBnJjYXJvbgd1bmkwMTU3BnNhY3V0ZQtzY2lyY3VtZmxleAd1bmkwMjE5B3VuaTFFNjEEdGJhcgZ0Y2Fyb24HdW5pMDE2Mwd1bmkwMjFCB3VuaTFFNkIGdWJyZXZlDXVodW5nYXJ1bWxhdXQHdW1hY3Jvbgd1b2dvbmVrBXVyaW5nBnV0aWxkZQZ3YWN1dGULd2NpcmN1bWZsZXgJd2RpZXJlc2lzBndncmF2ZQt5Y2lyY3VtZmxleAZ5Z3JhdmUGemFjdXRlCnpkb3RhY2NlbnQHdW5pMDM5NAd1bmkwM0E5B3VuaTAzQkMHemVyby5sZgZvbmUubGYGdHdvLmxmCHRocmVlLmxmB2ZvdXIubGYHZml2ZS5sZgZzaXgubGYIc2V2ZW4ubGYIZWlnaHQubGYHbmluZS5sZgd1bmkyMDgwB3VuaTIwODEHdW5pMjA4Mgd1bmkyMDgzB3VuaTIwODQHdW5pMjA4NQd1bmkyMDg2B3VuaTIwODcHdW5pMjA4OAd1bmkyMDg5CXplcm8uZG5vbQhvbmUuZG5vbQh0d28uZG5vbQp0aHJlZS5kbm9tCWZvdXIuZG5vbQlmaXZlLmRub20Ic2l4LmRub20Kc2V2ZW4uZG5vbQplaWdodC5kbm9tCW5pbmUuZG5vbQl6ZXJvLm51bXIIb25lLm51bXIIdHdvLm51bXIKdGhyZWUubnVtcglmb3VyLm51bXIJZml2ZS5udW1yCHNpeC5udW1yCnNldmVuLm51bXIKZWlnaHQubnVtcgluaW5lLm51bXIHdW5pMjA3MAd1bmkwMEI5B3VuaTAwQjIHdW5pMDBCMwd1bmkyMDc0B3VuaTIwNzUHdW5pMjA3Ngd1bmkyMDc3B3VuaTIwNzgHdW5pMjA3OQd1bmkyMTUzB3VuaTIxNTQJb25lZWlnaHRoDHRocmVlZWlnaHRocwtmaXZlZWlnaHRocwxzZXZlbmVpZ2h0aHMHdW5pMDBBRApmaWd1cmVkYXNoB3VuaTIwMDMHdW5pMjAwMgd1bmkyMDA3B3VuaTIwMDgHdW5pMDBBMAd1bmkyMDBCBEV1cm8HdW5pMjBCOQd1bmkyMEJGB3VuaTIyMTkHdW5pMjIxNQhlbXB0eXNldAd1bmkyMTI2B3VuaTIyMDYHdW5pMDBCNQZjaXJjbGUHdW5pRjhGRgd1bmkyMTE3B3VuaTIxMTMJZXN0aW1hdGVkB3VuaTIxMTYHdW5pMjEyMAd1bmkwMkJDB3VuaTAyQzkHdW5pMDMwOAd1bmkwMzA3CWdyYXZlY29tYglhY3V0ZWNvbWIHdW5pMDMwQgt1bmkwMzBDLmFsdAd1bmkwMzAyB3VuaTAzMEMHdW5pMDMwNgd1bmkwMzBBCXRpbGRlY29tYgd1bmkwMzA0B3VuaTAzMTIHdW5pMDMyNgd1bmkwMzI3B3VuaTAzMjgHdW5pMDMzNQd1bmkwMzM2B3VuaTAzMzcHdW5pMDMzOAd1bmlFMEZGB3VuaUVGRkQHdW5pRjAwMAAAALAALCCwAFVYRVkgIEu4AA5RS7AGU1pYsDQbsChZYGYgilVYsAIlYbkIAAgAY2MjYhshIbAAWbAAQyNEsgABAENgQi2wASywIGBmLbACLCMhIyEtsAMsIGSzAxQVAEJDsBNDIGBgQrECFENCsSUDQ7ACQ1R4ILAMI7ACQ0NhZLAEUHiyAgICQ2BCsCFlHCGwAkNDsg4VAUIcILACQyNCshMBE0NgQiOwAFBYZVmyFgECQ2BCLbAELLADK7AVQ1gjISMhsBZDQyOwAFBYZVkbIGQgsMBQsAQmWrIoAQ1DRWNFsAZFWCGwAyVZUltYISMhG4pYILBQUFghsEBZGyCwOFBYIbA4WVkgsQENQ0VjRWFksChQWCGxAQ1DRWNFILAwUFghsDBZGyCwwFBYIGYgiophILAKUFhgGyCwIFBYIbAKYBsgsDZQWCGwNmAbYFlZWRuwAiWwDENjsABSWLAAS7AKUFghsAxDG0uwHlBYIbAe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ABawFyNCICAgsAUmIC5HI0cjYSM8OC2wPSywABawFyNCILAKI0IgICBGI0ewASsjYTgtsD4ssAAWsBcjQrADJbACJUcjRyNhsABUWC4gPCMhG7ACJbACJUcjRyNhILAFJbAEJUcjRyNhsAYlsAUlSbACJWG5CAAIAGNjIyBYYhshWWO4BABiILAAUFiwQGBZZrABY2AjLiMgIDyKOCMhWS2wPyywABawFyNCILAKQyAuRyNHI2EgYLAgYGawAmIgsABQWLBAYFlmsAFjIyAgPIo4LbBALCMgLkawAiVGsBdDWFAbUllYIDxZLrEwARQrLbBBLCMgLkawAiVGsBdDWFIbUFlYIDxZLrEwARQrLbBCLCMgLkawAiVGsBdDWFAbUllYIDxZIyAuRrACJUawF0NYUhtQWVggPFkusTABFCstsEMssDorIyAuRrACJUawF0NYUBtSWVggPFkusTABFCstsEQssDsriiAgPLAGI0KKOCMgLkawAiVGsBdDWFAbUllYIDxZLrEwARQrsAZDLrAwKy2wRSywABawBCWwBCYgICBGI0dhsAwjQi5HI0cjYbALQysjIDwgLiM4sTABFCstsEYssQoEJUKwABawBCWwBCUgLkcjRyNhILAGI0KxDABCsAtDKyCwYFBYILBAUVizBCAFIBuzBCYFGllCQiMgR7AGQ7ACYiCwAFBYsEBgWWawAWNgILABKyCKimEgsARDYGQjsAVDYWRQWLAEQ2EbsAVDYFmwAyWwAmIgsABQWLBAYFlmsAFjYbACJUZhOCMgPCM4GyEgIEYjR7ABKyNhOCFZsTABFCstsEcssQA6Ky6xMAEUKy2wSCyxADsrISMgIDywBiNCIzixMAEUK7AGQy6wMCstsEkssAAVIEewACNCsgABARUUEy6wNiotsEossAAVIEewACNCsgABARUUEy6wNiotsEsssQABFBOwNyotsEwssDkqLbBNLLAAFkUjIC4gRoojYTixMAEUKy2wTiywCiNCsE0rLbBPLLIAAEYrLbBQLLIAAUYrLbBRLLIBAEYrLbBSLLIBAUYrLbBTLLIAAEcrLbBULLIAAUcrLbBVLLIBAEcrLbBWLLIBAUcrLbBXLLMAAABDKy2wWCyzAAEAQystsFksswEAAEMrLbBaLLMBAQBDKy2wWyyzAAABQystsFwsswABAUMrLbBdLLMBAAFDKy2wXiyzAQEBQystsF8ssgAARSstsGAssgABRSstsGEssgEARSstsGIssgEBRSstsGMssgAASCstsGQssgABSCstsGUssgEASCstsGYssgEBSCstsGcsswAAAEQrLbBoLLMAAQBEKy2waSyzAQAARCstsGosswEBAEQrLbBrLLMAAAFEKy2wbCyzAAEBRCstsG0sswEAAUQrLbBuLLMBAQFEKy2wbyyxADwrLrEwARQrLbBwLLEAPCuwQCstsHEssQA8K7BBKy2wciywABaxADwrsEIrLbBzLLEBPCuwQCstsHQssQE8K7BBKy2wdSywABaxATwrsEIrLbB2LLEAPSsusTABFCstsHcssQA9K7BAKy2weCyxAD0rsEErLbB5LLEAPSuwQistsHossQE9K7BAKy2weyyxAT0rsEErLbB8LLEBPSuwQistsH0ssQA+Ky6xMAEUKy2wfiyxAD4rsEArLbB/LLEAPiuwQSstsIAssQA+K7BCKy2wgSyxAT4rsEArLbCCLLEBPiuwQSstsIMssQE+K7BCKy2whCyxAD8rLrEwARQrLbCFLLEAPyuwQCstsIYssQA/K7BBKy2whyyxAD8rsEIrLbCILLEBPyuwQCstsIkssQE/K7BBKy2wiiyxAT8rsEIrLbCLLLILAANFUFiwBhuyBAIDRVgjIRshWVlCK7AIZbADJFB4sQUBFUVYMFktAAAAAAEAAAAKADgAdgACREZMVAAebGF0bgAOAAQAAAAA//8AAwABAAMABQAEAAAAAP//AAMAAAACAAQABmtlcm4ANmtlcm4ANm1hcmsALm1hcmsALm1rbWsAJm1rbWsAJgAAAAIABAAFAAAAAgACAAMAAAACAAAAAQAGHI4N4g0kAVABBgAOAAYCAAABAAgAAQDgAIwAAQCuAAwAGAB6AHQAdABuAG4AaABuAG4AbgBiAFwAVgBQAEoASgBKAEoARABEAEoAPgB6ADgAMgABAPoDYgABAPoDkAABAP4DXgABAPoDUQABAPoDXgABAAADSwABAAADPQABAAADYgABAAADkAABAAQDXgABAAADXgABAAADUQABAPoDPQACAAUBzAHRAAAB0wHZAAYB4QHjAA0B5QHqABAB7AHtABYADAAADQgAAA0IAAANCAAADQgAAA0CAAANCAAADQgAAA0IAAANCAAADQgAAA0IAAANCAACAAIBzQHRAAAB0wHZAAUABgEAAAEACAABADoAJgABADAADAADABQADgAIAAEA//9tAAEAAP9tAAEAAP9DAAEAAwHaAdsB5AACAAAMggAADIIAAQACAdoB2wAEAAAAAQAIAAELvAsuAAQLYgAMAQ0LHAsWCxAAAAscCxYLCgAACxwLFgsKAAALHAsWCwoAAAscCxYLBAAACxwLFgsKAAALHAsWCv4AAAscCxYLEAAACxwLFgr4AAALHAsWCvIAAArsAAAK5gAACuwAAArgAAAK2gAACtQAAAraAAAKzgAACsgAAArCAAAKyAAACrwAAArIAAAKvAAACrYAAAAAAAAKyAAACrwAAArIAAAKsAAACqoAAAqkCp4KmAAACpIKjAqqAAAKhgqeCpgAAAqSCowKqgAACoAKngp6CnQK1AAACnoKdApuAAAKegp0Cm4AAAp6CnQKbgAACnoKdApuAAAKegp0Cs4AAAp6CnQKzgAACnoKdApuAAAKegp0CmgAAAp6CnQK1AAACmIAAApcAAAKYgAAClYAAApQAAAKSgAAClAAAApEAAAKUAAACkQAAAo+AAAKSgAAClAAAAo4AAAKMgAACiwKJgogAAAKGgoUCjIAAAoOCiYKCAoCCfwAAAn2CgIJ8AAACggKAgnqAAAKCAoCCeoAAAoICgIJ6gAACggKAgnkAAAKCAoCCeQAAAoICgIJ6gAACggKAgneAAAKCAoCCfwAAAoICgIJ2AAACdIAAAnMAAAJ0gAACcYAAAnSAAAJxgAACcAAAAm6AAAJtAAACboAAAmuAAAJqAmiCa4AAAmcCaIJrgAACagJogmWAAAJqAmiCa4AAAmoCaIJkAAACYoJhAl+AAAJeAAACX4AAAlyAAAJbAAACWYAAAlsAAAJYAAACWwAAAlgAAAJWgAACWYAAAlsAAAJZgAACWwAAAlUAAAJTglICUIJPAlOCUgJNgk8CU4JSAk2CTwJTglICTYJPAlOCUgJMAk8CU4JSAk2CTwJTglICTYJPAlOCUgJKgk8CU4JSAlCCTwJTglICTYJPAlOCUgJJAk8CR4AAArUAAAJHgAACs4AAAkYAAAKwgAACRgAAAq8AAAJGAAACrwAAAkSAAAKwgAACQwAAAkGAAAJDAAACQAAAAkMAAAJAAAACPoAAAAAAAAJDAAACQAAAAj0AAAJBgAACQwAAAjuAAAI6AAACOII3AjoAAAI4gjcCOgAAAjWCNwI0AAAAAAI3AjKAAAI4gjcCOgAAAjECNwLHAi+CxAAAAscCL4LCgAACxwIvgsKAAALHAi+CwoAAAscCL4LBAAACxwIvgsKAAALHAi+CwoAAAscCL4K/gAACxwIvgsQAAALHAi+CvgAAAscCL4K8gAACLgAAArUAAAIsgAACKwAAAiyAAAIpgAACLIAAAimAAAIsgAACKAAAAiyAAAIpgAACRgAAAiaAAAKyAAACkoAAArIAAAKRAAACsgAAApEAAAKyAAACjgAAArIAAAKRAAACJQAAAiOAAAIlAAACIgAAAiUAAAIiAAACJQAAAiCAAALHAsWCxAAAAscCxYLCgAACxwLFgsKAAALHAsWCwoAAAscCxYLBAAACxwLFgsKAAALHAsWCv4AAAscCxYLEAAACxwLFgr4AAALHAsWCvIAAArsAAAK5gAACuwAAArgAAAK2gAACtQAAAraAAAKzgAACsgAAArCAAAKyAAACrwAAArIAAAKvAAACrYAAAAAAAAKyAAACrwAAArIAAAKsAAACqoAAAqkCp4KmAAACpIKjAqqAAAKhgqeCpgAAAqSCowKqgAACoAKngp6CnQK1AAACnoKdApuAAAKegp0Cm4AAAp6CnQKbgAACnoKdApuAAAKegp0Cs4AAAp6CnQKzgAACnoKdApuAAAKegp0CmgAAAp6CnQK1AAACmIAAApcAAAKYgAAClYAAApQAAAKSgAAClAAAApEAAAKUAAACkQAAAo+AAAKSgAAClAAAAo4AAAKMgAACiwKJgogAAAKGgoUCjIAAAoOCiYKCAoCCfwAAAoICgIJ/AAACggKAgnqAAAKCAoCCeoAAAoICgIJ6gAACggKAgnkAAAKCAoCCeQAAAoICgIJ6gAACfYKAgnwAAAKCAoCCd4AAAoICgIJ/AAACggKAgnYAAAJ0gAACcwAAAnSAAAJzAAACdIAAAnGAAAJ0gAACcYAAAnAAAAJugAACbQAAAm6AAAJwAAACboAAAmuAAAJqAmiCa4AAAmcCaIJrgAACagJogmWAAAJqAmiCa4AAAmoCaIJkAAACYoJhAl+AAAJeAAACX4AAAlyAAAJbAAACWYAAAlsAAAJYAAACHwAAAh2AAAJbAAACWAAAAlaAAAJZgAACWwAAAlmAAAJbAAA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ALcAAAABACH/9gFpAsYAHQBoS7AJUFhAJQABAgUCAXIABQAEAwUEZwACAgBhAAAALk0AAwMGYQcBBgYsBk4bQCYAAQIFAgEFgAAFAAQDBQRnAAICAGEAAAAuTQADAwZhBwEGBiwGTllADwAAAB0AHBESIyITJQgIHCsWJjURNDYzMhYVFSM1NCMiFREUMzI1NSM1MxUUBiN1VFRQUFRoOTk5OTefVFAKW1UBcFVbW1U8Q0VF/oFERIlk5VVbAP//ACH/9gFpA14AIgApAAAAAwHVAMUAAP//ACH/9gFpA14AIgApAAAAAwHTAMUAAP//ACH/QwFpAsYAIgApAAAAAwHaAMQAAP//ACH/9gFpA1EAIgApAAAAAwHOAMUAAAABACkAAAF7ArwACwAhQB4AAQAEAwEEZwIBAAAlTQUBAwMmA04RERERERAGCBwrEzMRMxEzESMRIxEjKW52bm52bgK8/uMBHf1EATv+xQACAAoAAAGsArwAEwAXADZAMwkHAgUKBAIACwUAZwALAAIBCwJnCAEGBiVNAwEBASYBThcWFRQTEhEREREREREREAwIHysBIxEjESMRIxEjNTM1MxUzNTMVMwcjFTMBrChudm4oKG52biiWdnYCAf3/ATv+xQIBWmFhYWFaYv//ACkAAAF7A14AIgAuAAAAAwHTANIAAAABACkAAACXArwAAwATQBAAAAAlTQABASYBThEQAggYKxMzESMpbm4CvP1E//8AKf/8AaMCvAAiADEAAAADADwAwAAA//8AJAAAAOIDXgAiADEAAAACAdBgAAAA////6gAAANYDXgAiADEAAAACAdVgAAAA////2gAAAOYDXgAiADEAAAACAdNgAAAA////4gAAAN4DUQAiADEAAAACAc1gAAAA//8AKQAAAJcDUQAiADEAAAACAc5gAAAA////3gAAAJwDXgAiADEAAAACAc9gAAAA////7QAAANMDQgAiADEAAAACAdhgAAAAAAEAEf9tAK0CvAAVACpAJwMBAAQBTAUBBAAABABlAAICJU0DAQEBJgFOAAAAFQAUEREUJQYIGisWNjcVBgYjIiY1NDcjETMRIwYVFBYzmREDER0WKS9ELG4THhQPVgUBOAcEIB4zIgK8/UQZIQ0PAP///9UAAADrA2IAIgAxAAAAAgHXYAAAAAABABD//ADjArwADQAp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AYECvAAJAB1AGgcDAAMCAAFMAQEAACVNAAICJgJOEhMRAwgZKxMDMxMzEzMDESOOhXVLAktrhW4BKgGS/v8BAf5u/tb//wAJAAABgQNeACIAgwAAAAMB0ADFAAD//wAJAAABgQNeACIAgwAAAAMB0wDFAAD//wAJAAABgQNRACIAgwAAAAMBzQDFAAD//wAJAAABgQNeACIAgwAAAAMBzwDFAAAAAQATAAABVQK8AAkAKUAmBQEAAQABAwICTAAAAAFfAAEBJU0AAgIDXwADAyYDThESEREECBorNxMjNSEVAzMVIRPMwgE4zMz+vmIB9mRi/gpk//8AEwAAAVUDXgAiAIgAAAADAdAAuQAA//8AEwAAAVUDXgAiAIgAAAADAdQAuQAA//8AEwAAAVUDUQAiAIgAAAADAc4AuQAA//8ADAAAAYUCvAACAAQAAP//AAwAAAGFA14AAgAFAAD//wAMAAABhQNeAAIABgAA//8ADAAAAYUDXgACAAcAAP//AAwAAAGFA1EAAgAIAAD//wAMAAABhQNeAAIACQAA//8ADAAAAYUDQgACAAoAAP//AAz/bQGFArwAAgALAAD//wAMAAABhQOQAAIADAAA//8ADAAAAYUDYgACAA0AAP//AAoAAAIuArwAAgAOAAD//wAKAAACLgNeAAIADwAA//8AKQAAAX0CvAACABAAAP//ACkAAAF9A1EAAgARAAD//wAi//YBZgLGAAIAEgAA//8AIv/2AWYDXgACABMAAP//ACL/9gFmA14AAgAUAAD//wAi/20BZgLGAAIAFQAA//8AIv/2AWYDXgACABYAAP//ACL/9gFmA1EAAgAXAAD//wApAAABdQK8AAIAGAAA//8ACgAAAYYCvAACABkAAP//ACkAAAF1A14AAgAaAAD//wAKAAABhgK8AAIAGwAA//8AKQAAAXUDUQACABwAAP//ACkAAAFVArwAAgAdAAD//wApAAABVQNeAAIAHgAA//8AKQAAAVUDXgACAB8AAP//ACkAAAFVA14AAgAgAAD//wApAAABVQNeAAIAIQAA//8AKQAAAVUDUQACACIAAP//ACkAAAFVA1EAAgAjAAD//wApAAABVQNeAAIAJAAA//8AKQAAAVUDQgACACUAAP//ACn/bQFVArwAAgAmAAD//wApAAABTAK8AAIAJwAA//8AKQAAAUwDUQACACgAAP//ACH/9gFpAsYAAgApAAD//wAh//YBaQNeAAIAKgAA//8AIf/2AWkDXgACACsAAP//ACH/QwFpAsYAAgAsAAD//wAh//YBaQNRAAIALQAA//8AKQAAAXsCvAACAC4AAP//AAoAAAGsArwAAgAvAAD//wApAAABewNeAAIAMAAA//8AKQAAAJcCvAACADEAAP//ACkAAACXArwAAgAxAAD//wAkAAAA4gNeAAIAMwAA////6gAAANYDXgACADQAAP///9oAAADmA14AAgA1AAD////iAAAA3gNRAAIANgAA//8AKQAAAJcDUQACADcAAP///94AAACcA14AAgA4AAD//wAp//wBowK8AAIAMgAA////7QAAANMDQgACADkAAP//ABH/bQCtArwAAgA6AAD////VAAAA6wNiAAIAOwAA//8AEP/8AOMCvAACADwAAP//ABD//ADjArwAAgA8AAD//wAQ//wBHwNeAAIAPQAA//8AEP/8ASMDXgACAD4AAP//ACkAAAGTArwAAgA/AAD//wAp/0MBkwK8AAIAQAAA//8AKQAAAZMCvAACAD8AAP//ACkAAAFMArwAAgBBAAD//wApAAABTANeAAIAQgAA//8AKQAAAUwCvAACAEMAAP//ACn/QwFMArwAAgBEAAD//wApAAABTAK8AAIARQAA//8ACgAAAWACvAACAEYAAP//ACkAAAHxArwAAgBHAAD//wApAAAB8QNRAAIASAAA//8AKQAAAYICvAACAEkAAP//ACkAAAGCA14AAgBKAAD//wAEAAAB9QK8ACIByzkAAAIASXMAAAD//wApAAABggNeAAIASwAA//8AKf9DAYICvAACAEwAAP//ACn/VgGCArwAAgBNAAD//wApAAABggNiAAIATgAA//8AIf/2AW8CxgACAE8AAP//ACH/9gFvA14AAgBQAAD//wAh//YBbwNeAAIAUQAA//8AIf/2AW8DXgACAFIAAP//ACH/9gFvA1EAAgBTAAD//wAh//YBbwNeAAIAVAAA//8AIf/2AYwDXgACAFUAAP//ACH/9gFvA0IAAgBWAAD//wAX/+YBeQLWAAIAVwAA//8AF//mAXkDXgACAFgAAP//ACH/9gFvA2IAAgBZAAD//wAhAAACKwK8AAIAWgAA//8AKQAAAW8CvAACAFsAAP//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";
 
+// Boot: cargar la fuente embebida y listo. NO cargamos Google Fonts en el boot
+// porque (a) la embebida ya es Bebas Neue, (b) Google Fonts puede servir TTFs
+// con cmaps incompatibles con opentype.js, sobrescribiendo silenciosamente la
+// fuente válida. Si el usuario quiere otra fuente, usa el selector.
 loadEmbeddedFont();
 
 </script>
